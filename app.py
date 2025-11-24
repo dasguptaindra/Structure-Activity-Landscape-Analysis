@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from rdkit import Chem
-from rdkit.Chem import AllChem, DataStructs
+from rdkit.Chem import AllChem, DataStructs, MACCSkeys
 from sklearn.neighbors import KernelDensity
 import plotly.express as px
 import os
@@ -38,8 +38,21 @@ if example_btn:
     uploaded_file = BytesIO(example.to_csv(index=False).encode("utf-8"))
     st.sidebar.success("Example loaded — go to main area and press Generate")
 
-radius = st.sidebar.slider("Morgan radius", 1, 4, 2)
-n_bits = st.sidebar.selectbox("Fingerprint size (bits)", [512, 1024, 2048], index=2)
+# Fingerprint type selection
+fingerprint_type = st.sidebar.selectbox(
+    "Fingerprint Type", 
+    ["ECFP4", "ECFP6", "MACCS"], 
+    index=0
+)
+
+# Conditional parameters based on fingerprint type
+if fingerprint_type.startswith("ECFP"):
+    radius = st.sidebar.slider("Morgan radius", 1, 4, 2 if fingerprint_type == "ECFP4" else 3)
+    n_bits = st.sidebar.selectbox("Fingerprint size (bits)", [512, 1024, 2048], index=2)
+else:  # MACCS
+    radius = None
+    n_bits = 167  # MACCS has fixed size
+
 color_by = st.sidebar.selectbox("Color by", ["SALI", "MaxActivity", "Density"])
 top_n = st.sidebar.number_input("Top cliffs to highlight (top SALI)", min_value=1, max_value=1000, value=20)
 kde_bandwidth = st.sidebar.slider("KDE bandwidth (if Density)", 0.02, 1.0, 0.12)
@@ -55,7 +68,14 @@ if uploaded_file is None:
 
 # Read file
 try:
-    df = pd.read_csv(uploaded_file)
+    if hasattr(uploaded_file, 'getvalue'):
+        # This is a BytesIO object from example
+        df = pd.read_csv(uploaded_file)
+    else:
+        # This is an uploaded file
+        df = pd.read_csv(uploaded_file)
+    st.write(f"Dataset preview (first 5 rows):")
+    st.dataframe(df.head())
 except Exception as e:
     st.error(f"Could not read CSV: {e}")
     st.stop()
@@ -71,75 +91,108 @@ id_col = st.selectbox("Optional ID column", id_col_opt, index=0)
 # Generate button
 if st.button("🚀 Generate SAS map and analyze"):
     st.info("Processing — this may take a while for large datasets. Progress messages show below.")
-    # Basic filter
-    df = df.dropna(subset=[smiles_col, activity_col]).reset_index(drop=True)
+    
+    # Basic filter and validation
+    df_clean = df.dropna(subset=[smiles_col, activity_col]).copy()
+    if len(df_clean) == 0:
+        st.error("No valid data after removing rows with missing SMILES or activity values.")
+        st.stop()
+        
     # parse activities
     try:
-        activities = df[activity_col].astype(float).values
+        activities = df_clean[activity_col].astype(float).values
     except Exception as e:
         st.error(f"Activity column conversion to float failed: {e}")
         st.stop()
 
-    ids = df[id_col].astype(str).values if id_col != "None" else np.array([f"Mol_{i+1}" for i in range(len(df))])
-    smiles_list = df[smiles_col].astype(str).values
+    ids = df_clean[id_col].astype(str).values if id_col != "None" else np.array([f"Mol_{i+1}" for i in range(len(df_clean))])
+    smiles_list = df_clean[smiles_col].astype(str).values
 
     # Compute fingerprints
-    st.write("Computing fingerprints...")
+    st.write(f"Computing {fingerprint_type} fingerprints...")
     fps = []
     valid_idx = []
-    invalid_count = 0
+    invalid_smiles = []
     
     # Progress tracking
     progress_bar = st.progress(0)
     status_text = st.empty()
     
     for i, s in enumerate(smiles_list):
-        status_text.text(f"Parsing SMILES {i+1}/{len(smiles_list)}")
+        status_text.text(f"Parsing SMILES {i+1}/{len(smiles_list)}: {s[:50]}...")
         progress_bar.progress((i + 1) / len(smiles_list))
         
         m = Chem.MolFromSmiles(s)
         if m is None:
-            invalid_count += 1
-            fps.append(None)
+            invalid_smiles.append(s)
             continue
-        fp = AllChem.GetMorganFingerprintAsBitVect(m, radius=radius, nBits=n_bits)
-        fps.append(fp)
-        valid_idx.append(i)
+            
+        try:
+            if fingerprint_type == "ECFP4":
+                fp = AllChem.GetMorganFingerprintAsBitVect(m, radius=2, nBits=n_bits)  # ECFP4 = radius 2
+            elif fingerprint_type == "ECFP6":
+                fp = AllChem.GetMorganFingerprintAsBitVect(m, radius=3, nBits=n_bits)  # ECFP6 = radius 3
+            elif fingerprint_type == "MACCS":
+                fp = MACCSkeys.GenMACCSKeys(m)
+            else:
+                fp = AllChem.GetMorganFingerprintAsBitVect(m, radius=radius, nBits=n_bits)
+            
+            fps.append(fp)
+            valid_idx.append(i)
+        except Exception as e:
+            invalid_smiles.append(f"{s} (error: {str(e)})")
+            continue
     
     progress_bar.empty()
     status_text.empty()
     
-    if invalid_count:
-        st.warning(f"{invalid_count} invalid SMILES found and will be excluded.")
+    if invalid_smiles:
+        st.warning(f"{len(invalid_smiles)} invalid SMILES found and excluded.")
+        with st.expander("Show invalid SMILES"):
+            for bad_smiles in invalid_smiles[:10]:  # Show first 10
+                st.write(bad_smiles)
+            if len(invalid_smiles) > 10:
+                st.write(f"... and {len(invalid_smiles) - 10} more")
     
     # Keep only valid entries
-    fps = [fps[i] for i in valid_idx]
+    fps = fps
     activities = activities[valid_idx]
     ids = ids[valid_idx]
     smiles_list = smiles_list[valid_idx]
     n = len(fps)
-    st.success(f"Fingerprints computed for {n} molecules.")
-
+    
     if n < 2:
         st.error("Need at least 2 valid molecules to compute pairs.")
         st.stop()
 
+    st.success(f"Fingerprints computed for {n} molecules using {fingerprint_type}.")
+
     # Pairwise similarity
     st.write("Computing pairwise Tanimoto similarities...")
+    
+    # Initialize similarity matrix
     sim_matrix = np.zeros((n, n), dtype=float)
     
     # Progress for similarity calculation
     sim_progress = st.progress(0)
     sim_status = st.empty()
     
-    # compute triangular matrix
+    # Compute triangular matrix efficiently
     for i in range(n):
         sim_status.text(f"Computing similarities: {i+1}/{n}")
         sim_progress.progress((i + 1) / n)
         for j in range(i, n):
-            s = DataStructs.TanimotoSimilarity(fps[i], fps[j])
-            sim_matrix[i, j] = s
-            sim_matrix[j, i] = s
+            if i == j:
+                sim_matrix[i, j] = 1.0
+            else:
+                try:
+                    s = DataStructs.TanimotoSimilarity(fps[i], fps[j])
+                    sim_matrix[i, j] = s
+                    sim_matrix[j, i] = s
+                except Exception as e:
+                    st.warning(f"Error computing similarity between {i} and {j}: {e}")
+                    sim_matrix[i, j] = 0.0
+                    sim_matrix[j, i] = 0.0
     
     sim_progress.empty()
     sim_status.empty()
@@ -158,17 +211,19 @@ if st.button("🚀 Generate SAS map and analyze"):
         for j in range(i+1, n):
             if pair_count % 1000 == 0:  # Update progress periodically
                 pair_status.text(f"Processing pairs: {pair_count:,}/{total_pairs:,}")
-                pair_progress.progress(pair_count / total_pairs)
+                pair_progress.progress(min(pair_count / total_pairs, 1.0))
             
             sim = sim_matrix[i, j]
             act_diff = float(abs(activities[i] - activities[j]))
             max_val = float(max(activities[i], activities[j]))
             distance = max(1.0 - sim, eps_distance)
             sali = act_diff / distance
+            
             pairs.append({
                 "Mol1_idx": i, "Mol2_idx": j,
                 "Mol1_ID": ids[i], "Mol2_ID": ids[j],
                 "SMILES1": smiles_list[i], "SMILES2": smiles_list[j],
+                "Activity1": activities[i], "Activity2": activities[j],
                 "Similarity": sim, "Activity_Diff": act_diff,
                 "MaxActivity": max_val, "SALI": sali
             })
@@ -177,16 +232,24 @@ if st.button("🚀 Generate SAS map and analyze"):
     pair_progress.empty()
     pair_status.empty()
     
+    if not pairs:
+        st.error("No valid pairs were generated. Check your data.")
+        st.stop()
+        
     pairs_df = pd.DataFrame(pairs)
     st.write(f"Created {len(pairs_df):,} pairs.")
 
     # Add Density if requested
     if color_by == "Density":
         st.write("Estimating 2D density (KDE)...")
-        xy = np.vstack([pairs_df["Similarity"].values, pairs_df["Activity_Diff"].values]).T
-        kde = KernelDensity(bandwidth=float(kde_bandwidth)).fit(xy)
-        pairs_df["Density"] = np.exp(kde.score_samples(xy))
-        st.success("Density estimated.")
+        try:
+            xy = np.vstack([pairs_df["Similarity"].values, pairs_df["Activity_Diff"].values]).T
+            kde = KernelDensity(bandwidth=float(kde_bandwidth)).fit(xy)
+            pairs_df["Density"] = np.exp(kde.score_samples(xy))
+            st.success("Density estimated.")
+        except Exception as e:
+            st.error(f"Density estimation failed: {e}")
+            pairs_df["Density"] = 1.0
 
     # Mark top N SALI cliffs
     top_n_use = min(int(top_n), len(pairs_df))
@@ -213,34 +276,52 @@ if st.button("🚀 Generate SAS map and analyze"):
     plot_df["symbol"] = np.where(plot_df["is_top_cliff"], "diamond", "circle")
 
     color_col = color_by if color_by in plot_df.columns else "SALI"
-    fig = px.scatter(
-        plot_df,
-        x="Similarity",
-        y="Activity_Diff",
-        color=color_col,
-        size="marker_size",
-        symbol="symbol",
-        hover_data=["Mol1_ID", "Mol2_ID", "Similarity", "Activity_Diff", "SALI"],
-        title=f"SAS Map — colored by {color_by} (top {top_n_use} cliffs highlighted)",
-        width=1000,
-        height=650,
-    )
-    fig.update_traces(marker=dict(opacity=0.8))
-    st.plotly_chart(fig, use_container_width=True)
+    
+    try:
+        fig = px.scatter(
+            plot_df,
+            x="Similarity",
+            y="Activity_Diff",
+            color=color_col,
+            size="marker_size",
+            symbol="symbol",
+            hover_data=["Mol1_ID", "Mol2_ID", "Similarity", "Activity_Diff", "SALI"],
+            title=f"SAS Map ({fingerprint_type}) — colored by {color_by} (top {top_n_use} cliffs highlighted)",
+            width=1000,
+            height=650,
+        )
+        fig.update_traces(marker=dict(opacity=0.8))
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.error(f"Plot generation failed: {e}")
+        # Show raw data instead
+        st.write("Plot data preview:")
+        st.dataframe(plot_df.head())
 
     # Sidebar: table and pair selection
     st.markdown("---")
     st.subheader("Top SALI cliffs (table & selection)")
-    top_table = pairs_df.sort_values("SALI", ascending=False).head(200).reset_index(drop=True)
-    # show top K
-    st.dataframe(top_table[["Mol1_ID","Mol2_ID","Similarity","Activity_Diff","MaxActivity","SALI"]])
+    
+    # Ensure we have data to display
+    if len(pairs_df) > 0:
+        top_table = pairs_df.sort_values("SALI", ascending=False).head(200).reset_index(drop=True)
+        # show top K
+        st.dataframe(top_table[["Mol1_ID","Mol2_ID","Similarity","Activity_Diff","MaxActivity","SALI"]])
+    else:
+        st.info("No pairs available in the table.")
 
     # Pair selection dropdown (by index in pairs_df)
     st.subheader("Inspect a pair (view structures & open in Ketcher)")
+    
+    if len(pairs_df) == 0:
+        st.info("No pairs available to inspect.")
+        st.stop()
+
     pair_selector_options = [
         f"{idx}: {row.Mol1_ID} — {row.Mol2_ID} (SALI={row.SALI:.2f})"
         for idx, row in pairs_df.sort_values("SALI", ascending=False).head(1000).reset_index().iterrows()
     ]
+    
     if len(pair_selector_options) == 0:
         st.info("No pairs available to inspect.")
         st.stop()
@@ -265,13 +346,13 @@ if st.button("🚀 Generate SAS map and analyze"):
         st.markdown(f"**{sel_row['Mol1_ID']}**")
         st.markdown(f"**SMILES:**")
         st.code(sel_row["SMILES1"], language="text")
-        st.markdown(f"**Activity:** {activities[sel_row['Mol1_idx']]:.2f}")
+        st.markdown(f"**Activity:** {sel_row['Activity1']:.2f}")
 
     with col2:
         st.markdown(f"**{sel_row['Mol2_ID']}**")
         st.markdown(f"**SMILES:**")
         st.code(sel_row["SMILES2"], language="text")
-        st.markdown(f"**Activity:** {activities[sel_row['Mol2_idx']]:.2f}")
+        st.markdown(f"**Activity:** {sel_row['Activity2']:.2f}")
 
     with col3:
         st.markdown("**Actions**")
@@ -291,6 +372,6 @@ if st.button("🚀 Generate SAS map and analyze"):
     st.markdown("---")
     st.subheader("Download full results")
     full_csv = pairs_df.to_csv(index=False).encode("utf-8")
-    st.download_button("📥 Download full pairs CSV", data=full_csv, file_name="SAS_pairs_full.csv", mime="text/csv")
+    st.download_button("📥 Download full pairs CSV", data=full_csv, file_name=f"SAS_pairs_full_{fingerprint_type}.csv", mime="text/csv")
 
-    st.success("Analysis complete.")
+    st.success("Analysis complete!")
