@@ -5,7 +5,6 @@ import pandas as pd
 import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem, DataStructs
-from rdkit.Chem.Draw import MolToImage
 from sklearn.neighbors import KernelDensity
 import plotly.express as px
 import os
@@ -260,38 +259,19 @@ if st.button("🚀 Generate SAS map and analyze"):
         "SALI": float(sel_row["SALI"]),
     })
 
-    # Render RDKit SVGs for both molecules side-by-side
-    def mol_to_svg(smiles, mol_size=(300,300)):
-        m = Chem.MolFromSmiles(smiles)
-        if m is None:
-            return "<p>Invalid SMILES</p>"
-        # kekulize for nicer drawing when possible
-        try:
-            Chem.Kekulize(m, clearAromaticFlags=True)
-        except Exception:
-            pass
-        from rdkit.Chem.Draw import rdMolDraw2D
-        drawer = rdMolDraw2D.MolDraw2DSVG(mol_size[0], mol_size[1])
-        opts = drawer.drawOptions()
-        opts.padding = 0.12
-        rdMolDraw2D.PrepareAndDrawMolecule(drawer, m)
-        drawer.FinishDrawing()
-        svg = drawer.GetDrawingText()
-        # Some RDKit versions prefix xml header; keep as-is
-        return svg
-
+    # Simple molecule display without SVG rendering
     col1, col2, col3 = st.columns([3,3,2])
     with col1:
         st.markdown(f"**{sel_row['Mol1_ID']}**")
-        svg1 = mol_to_svg(sel_row["SMILES1"])
-        st.components.v1.html(svg1, height=320)
-        st.markdown(f"SMILES: `{sel_row['SMILES1']}`")
+        st.markdown(f"**SMILES:**")
+        st.code(sel_row["SMILES1"], language="text")
+        st.markdown(f"**Activity:** {activities[sel_row['Mol1_idx']]:.2f}")
 
     with col2:
         st.markdown(f"**{sel_row['Mol2_ID']}**")
-        svg2 = mol_to_svg(sel_row["SMILES2"])
-        st.components.v1.html(svg2, height=320)
-        st.markdown(f"SMILES: `{sel_row['SMILES2']}`")
+        st.markdown(f"**SMILES:**")
+        st.code(sel_row["SMILES2"], language="text")
+        st.markdown(f"**Activity:** {activities[sel_row['Mol2_idx']]:.2f}")
 
     with col3:
         st.markdown("**Actions**")
