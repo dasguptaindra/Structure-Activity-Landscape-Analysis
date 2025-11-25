@@ -176,7 +176,7 @@ st.title("Molecular Landscape Explorer")
 
 st.sidebar.subheader("Technical support")
 st.sidebar.markdown(
-    """For technical issues or suggestions, please create an issue on our 
+    """For technical issues or suggestions, please create an issue on the 
     [project repository](https://github.com/dasguptaindra/Structure-Activity-Landscape-Analysis)."""
 )
 
@@ -374,6 +374,7 @@ if uploaded_file:
             
             csv_data = results_df.to_csv(index=False).encode('utf-8')
             st.download_button("Download CSV", csv_data, "basic_results.csv", "text/csv")
+
 
 
 
