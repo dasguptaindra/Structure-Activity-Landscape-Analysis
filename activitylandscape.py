@@ -392,7 +392,7 @@ if uploaded_file is not None:
             'Activity Cliffs': 'red',
             'Smooth SAR': 'green',
             'Scaffold Hops': 'blue',
-            'Non-descript Zone': 'gray'
+            'Non-descript Zone': 'orange'
         }
 
         if color_by == "Zone":
@@ -555,6 +555,7 @@ st.markdown(
     "</div>",
     unsafe_allow_html=True
 )
+
 
 
 
