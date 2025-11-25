@@ -230,7 +230,7 @@ st.sidebar.markdown(
 )
 
 # Parameters
-st.sidebar.markdown("### Parametrs")
+st.sidebar.markdown("### Parameters")
 mol_rep = st.sidebar.selectbox("Fingerprint Name", ["ECFP4", "ECFP6", "MACCS"], index=0)
 
 if mol_rep.startswith("ECFP"):
@@ -400,6 +400,7 @@ if uploaded_file is not None:
 
 else:
     st.info("👆 Please upload a CSV file to begin analysis")
+
 
 
 
