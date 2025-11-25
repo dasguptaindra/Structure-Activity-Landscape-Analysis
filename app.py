@@ -61,7 +61,9 @@ if analysis_mode == "Basic Landscape":
         "Molecular Representation", 
         ('ECFP4', 'ECFP6', 'ECFP8', 'ECFP10')
     )
-    radius = fingerprint_config[selected_fp]
+    # FIX: Renamed 'radius' to 'radius_param' to match function expectations
+    radius_param = fingerprint_config[selected_fp]
+    
     fingerprint_size = st.sidebar.selectbox(
         "Fingerprint Dimension", 
         options=[512, 1024, 2048, 4096], 
@@ -105,7 +107,6 @@ else:  # Advanced SAR Analysis
         ["SALI", "MaxActivity", "Zone"]
     )
     
-    # Add colormap selection option
     colormap_option = st.sidebar.selectbox(
         "Colormap (for SALI/MaxActivity)", 
         ["viridis", "plasma", "inferno", "magma", "cividis", "rainbow", "jet", "turbo", "coolwarm", "RdYlBu"],
@@ -120,10 +121,10 @@ else:  # Advanced SAR Analysis
 
     # Landscape classification parameters
     similarity_cutoff = st.sidebar.slider(
-        "Similarity threshold", 0.1, 0.9, 0.7, 0.05  # Changed default to 0.7
+        "Similarity threshold", 0.1, 0.9, 0.7, 0.05
     )
     activity_cutoff = st.sidebar.slider(
-        "Activity threshold", 1.0, 5.0, 1.0, 0.1  # Changed range to 1-5 with default 1
+        "Activity threshold", 1.0, 5.0, 1.0, 0.1
     )
 
 # Core computational functions
@@ -148,13 +149,14 @@ def classify_landscape_region(similarity, activity_diff, sim_threshold, act_thre
     else:
         return 'Baseline Regions'
 
-def analyze_molecular_pairs(df, radius_param, sim_threshold, act_threshold):
+def analyze_molecular_pairs(df, radius_param, fp_size, sim_threshold, act_threshold):
     """Analyze all molecular pairs in the dataset"""
     pair_results = []
     for (idx1, row1), (idx2, row2) in combinations(df.iterrows(), 2):
         smi1, act1 = row1['Smiles'], row1['pIC50']
         smi2, act2 = row2['Smiles'], row2['pIC50']
-        similarity = compute_similarity(smi1, smi2, int(radius_param), fingerprint_size)
+        # Use passed fp_size instead of global variable
+        similarity = compute_similarity(smi1, smi2, int(radius_param), fp_size)
         activity_difference = abs(act1 - act2)
         region = classify_landscape_region(
             similarity, activity_difference, sim_threshold, act_threshold
@@ -171,12 +173,12 @@ def analyze_molecular_pairs(df, radius_param, sim_threshold, act_threshold):
     )
     return results_df
 
-def create_landscape_visualization(results_df):
+def create_landscape_visualization(results_df, radius_param_val):
     """Generate the molecular landscape visualization"""
     region_colors = {
         'Activity Cliffs': 'red', 
         'Scaffold Transitions': 'purple', 
-        'Consistent SAR Regions': 'green',
+        'Consistent SAR Regions': 'green', 
         'Baseline Regions': 'blue'
     }
     
@@ -198,7 +200,8 @@ def create_landscape_visualization(results_df):
     ax.set_xlabel('Structural Similarity', fontsize=14, fontweight='bold')
     ax.set_ylabel('Activity Difference', fontsize=14, fontweight='bold')
     
-    fp_name = {2: 'ECFP4', 3: 'ECFP6', 4: 'ECFP8', 5: 'ECFP10'}[radius_param]
+    # Use passed radius parameter
+    fp_name = {2: 'ECFP4', 3: 'ECFP6', 4: 'ECFP8', 5: 'ECFP10'}[radius_param_val]
     ax.set_title(f'Molecular Landscape Map (Representation: {fp_name})', fontsize=14, fontweight='bold')
     ax.legend(loc='best')
     ax.grid(False)
@@ -496,8 +499,9 @@ if uploaded_data:
                             }
                         )
 
+                        # FIX: Passed 'fingerprint_size' correctly
                         landscape_results = analyze_molecular_pairs(
-                            analysis_data, radius, 
+                            analysis_data, radius_param, fingerprint_size, 
                             similarity_cutoff, activity_cutoff
                         )
 
@@ -518,7 +522,8 @@ if uploaded_data:
                             )
 
                         st.subheader("Molecular Landscape Visualization")
-                        landscape_plot = create_landscape_visualization(landscape_results)
+                        # FIX: Passed radius_param explicitly
+                        landscape_plot = create_landscape_visualization(landscape_results, radius_param)
                         plot_buffer = io.BytesIO()
                         landscape_plot.savefig(plot_buffer, format="png", bbox_inches="tight")
                         plot_buffer.seek(0)
