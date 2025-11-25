@@ -1,21 +1,17 @@
 import streamlit as st
 import pandas as pd
-from rdkit import Chem
 from rdkit import Chem, DataStructs
-from rdkit.Chem import AllChem, DataStructs, MACCSkeys
+from rdkit.Chem import AllChem, MACCSkeys
 import numpy as np
-from itertools import combinations
 import matplotlib.pyplot as plt
 import io
-from io import BytesIO
-from matplotlib.offsetbox import OffsetImage, AnnotationBbox
-import requests
 import plotly.express as px
-import plotly.graph_objects as go
+from scipy.stats import gaussian_kde
 import seaborn as sns
 
-# Molecular Landscape Explorer
-# A tool for analyzing structure-activity relationships in chemical datasets
+# ==============================================================================
+# 1. APP CONFIGURATION & SETUP
+# ==============================================================================
 
 st.set_page_config(
     page_title="Molecular Landscape Explorer",
@@ -23,203 +19,54 @@ st.set_page_config(
     page_icon="🧪"
 )
 
-# Set matplotlib style
+# Set visual style
 sns.set_style("whitegrid")
 
-st.title("Molecular Landscape Explorer")
-about_expander = st.expander("About Structure-Activity Landscape Analysis", expanded=True)
-with about_expander:
-    st.markdown('''
-    **Molecular Landscape Explorer** is an interactive tool for visualizing and analyzing 
-    structure-activity relationships in chemical compound datasets.  
-    
-    This application helps identify key patterns in molecular data including:
-    - **Activity Cliffs**: Structurally similar compounds with significant activity differences
-    - **SAR Zones**: Regions with predictable structure-activity relationships
-    - **Scaffold Transitions**: Areas where core molecular structures change
-    
-    *Understanding these patterns is crucial for medicinal chemistry and drug discovery efforts.*
-    ''')
+# Initialize Session State for data persistence
+# This is crucial for download buttons to work correctly without resetting the app
+if 'analysis_results' not in st.session_state:
+    st.session_state['analysis_results'] = None
+if 'analysis_mode_state' not in st.session_state:
+    st.session_state['analysis_mode_state'] = None
 
-# Sidebar configuration
-st.sidebar.subheader("Analysis Configuration")
+# ==============================================================================
+# 2. CORE COMPUTATIONAL FUNCTIONS (CACHED FOR PERFORMANCE & REPRODUCIBILITY)
+# ==============================================================================
 
-# Application mode selection
-analysis_mode = st.sidebar.radio(
-    "Analysis Mode", 
-    ["Basic Landscape", "Advanced SAR Analysis"]
-)
+@st.cache_data
+def compute_density(x, y):
+    """
+    Calculate point density using Gaussian KDE for visualization.
+    Cached to avoid re-computing on every interaction.
+    """
+    # Stack data and calculate density
+    xy = np.vstack([x, y])
+    try:
+        z = gaussian_kde(xy)(xy)
+        # Sort the points by density, so that the densest points are plotted last
+        idx = z.argsort()
+        return z, idx
+    except Exception:
+        # Fallback if KDE fails (e.g., singular matrix due to low variance)
+        return np.zeros_like(x), np.arange(len(x))
 
-if analysis_mode == "Basic Landscape":
-    fingerprint_config = {
-        'ECFP4': 2, 
-        'ECFP6': 3, 
-        'ECFP8': 4, 
-        'ECFP10': 5
-    }
-    selected_fp = st.sidebar.radio(
-        "Molecular Representation", 
-        ('ECFP4', 'ECFP6', 'ECFP8', 'ECFP10')
-    )
-    # FIX: Renamed 'radius' to 'radius_param' to match function expectations
-    radius_param = fingerprint_config[selected_fp]
-    
-    fingerprint_size = st.sidebar.selectbox(
-        "Fingerprint Dimension", 
-        options=[512, 1024, 2048, 4096], 
-        index=2
-    )
-    similarity_cutoff = st.sidebar.selectbox(
-        "Similarity Threshold", 
-        options=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
-        index=2  # Default to 0.7
-    )
-    activity_cutoff = st.sidebar.selectbox(
-        "Activity Difference Threshold", 
-        options=[1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0],
-        index=0  # Default to 1.0
-    )
-else:  # Advanced SAR Analysis
-    # Molecular representation selection
-    molecular_representation = st.sidebar.selectbox(
-        "Molecular Representation Type", 
-        ["ECFP4", "ECFP6", "MACCS"], 
-        index=0
-    )
-
-    # Configuration based on representation type
-    if molecular_representation.startswith("ECFP"):
-        radius_param = st.sidebar.slider(
-            "Morgan Radius", 1, 4, 
-            2 if molecular_representation == "ECFP4" else 3
-        )
-        bit_size = st.sidebar.selectbox(
-            "Fingerprint Dimension", 
-            [512, 1024, 2048], 
-            index=2
-        )
-    else:  # MACCS
-        radius_param = None
-        bit_size = 167  # Fixed size for MACCS keys
-
-    visualization_color = st.sidebar.selectbox(
-        "Color Mapping", 
-        ["SALI", "MaxActivity", "Zone"]
-    )
-    
-    colormap_option = st.sidebar.selectbox(
-        "Colormap (for SALI/MaxActivity)", 
-        ["viridis", "plasma", "inferno", "magma", "cividis", "rainbow", "jet", "turbo", "coolwarm", "RdYlBu"],
-        index=0
-    )
-    
-    max_visualization_pairs = st.sidebar.number_input(
-        "Maximum pairs for visualization", 
-        min_value=2000, max_value=200000, 
-        value=10000, step=1000
-    )
-
-    # Landscape classification parameters
-    similarity_cutoff = st.sidebar.slider(
-        "Similarity threshold", 0.1, 0.9, 0.7, 0.05
-    )
-    activity_cutoff = st.sidebar.slider(
-        "Activity threshold", 1.0, 5.0, 1.0, 0.1
-    )
-
-# Core computational functions
-def compute_similarity(smiles1, smiles2, radius_param, nBits):
-    """Calculate Tanimoto similarity between two molecules"""
-    mol1 = Chem.MolFromSmiles(smiles1)
-    mol2 = Chem.MolFromSmiles(smiles2)
-    if mol1 is None or mol2 is None:
-        return None
-    fp1 = AllChem.GetMorganFingerprintAsBitVect(mol1, radius_param, nBits)
-    fp2 = AllChem.GetMorganFingerprintAsBitVect(mol2, radius_param, nBits)
-    return DataStructs.TanimotoSimilarity(fp1, fp2)
-
-def classify_landscape_region(similarity, activity_diff, sim_threshold, act_threshold):
-    """Classify molecular pairs into landscape regions"""
-    if similarity >= sim_threshold and activity_diff >= act_threshold:
-        return 'Activity Cliffs'
-    elif similarity < sim_threshold and activity_diff < act_threshold:
-        return 'Scaffold Transitions'
-    elif similarity >= sim_threshold and activity_diff < act_threshold:
-        return 'Consistent SAR Regions'
-    else:
-        return 'Baseline Regions'
-
-def analyze_molecular_pairs(df, radius_param, fp_size, sim_threshold, act_threshold):
-    """Analyze all molecular pairs in the dataset"""
-    pair_results = []
-    for (idx1, row1), (idx2, row2) in combinations(df.iterrows(), 2):
-        smi1, act1 = row1['Smiles'], row1['pIC50']
-        smi2, act2 = row2['Smiles'], row2['pIC50']
-        # Use passed fp_size instead of global variable
-        similarity = compute_similarity(smi1, smi2, int(radius_param), fp_size)
-        activity_difference = abs(act1 - act2)
-        region = classify_landscape_region(
-            similarity, activity_difference, sim_threshold, act_threshold
-        )
-        pair_results.append((
-            row1['Molecule ID'], row2['Molecule ID'], 
-            similarity, activity_difference, region
-        ))
-
-    results_df = pd.DataFrame(
-        pair_results,
-        columns=['Molecule_ID1', 'Molecule_ID2', 'Similarity', 
-                'Activity_Difference', 'Landscape_Region']
-    )
-    return results_df
-
-def create_landscape_visualization(results_df, radius_param_val):
-    """Generate the molecular landscape visualization"""
-    region_colors = {
-        'Activity Cliffs': 'red', 
-        'Scaffold Transitions': 'purple', 
-        'Consistent SAR Regions': 'green', 
-        'Baseline Regions': 'blue'
-    }
-    
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    for region, color in region_colors.items():
-        region_data = results_df[results_df['Landscape_Region'] == region]
-        ax.scatter(
-            region_data['Similarity'], 
-            region_data['Activity_Difference'], 
-            c=color, label=region, alpha=0.6
-        )
-
-    # Add threshold lines
-    ax.axvline(similarity_cutoff, linestyle='dotted', color='black')
-    ax.axhline(activity_cutoff, linestyle='dotted', color='black')
-
-    # Set axis labels with increased size and bold font
-    ax.set_xlabel('Structural Similarity', fontsize=14, fontweight='bold')
-    ax.set_ylabel('Activity Difference', fontsize=14, fontweight='bold')
-    
-    # Use passed radius parameter
-    fp_name = {2: 'ECFP4', 3: 'ECFP6', 4: 'ECFP8', 5: 'ECFP10'}[radius_param_val]
-    ax.set_title(f'Molecular Landscape Map (Representation: {fp_name})', fontsize=14, fontweight='bold')
-    ax.legend(loc='best')
-    ax.grid(False)
-
-    st.pyplot(fig)
-    return fig
-
-# Advanced analysis functions
+@st.cache_data
 def generate_molecular_descriptors(smiles_list, desc_type, radius_param, n_bits):
-    """Generate molecular descriptors/fingerprints"""
+    """
+    Generate molecular descriptors/fingerprints.
+    Cached: Running this twice on the same dataset will be instant.
+    """
     descriptors = []
     valid_indices = []
     problematic_smiles = []
     
     for idx, smiles in enumerate(smiles_list):
-        mol = Chem.MolFromSmiles(smiles)
+        # Ensure string format
+        smiles_str = str(smiles)
+        mol = Chem.MolFromSmiles(smiles_str)
+        
         if mol is None:
-            problematic_smiles.append(smiles)
+            problematic_smiles.append(smiles_str)
             continue
             
         try:
@@ -230,385 +77,370 @@ def generate_molecular_descriptors(smiles_list, desc_type, radius_param, n_bits)
             elif desc_type == "MACCS":
                 desc = MACCSkeys.GenMACCSKeys(mol)
             else:
+                # Custom case
                 desc = AllChem.GetMorganFingerprintAsBitVect(mol, radius=radius_param, nBits=n_bits)
             
             descriptors.append(desc)
             valid_indices.append(idx)
         except Exception as e:
-            problematic_smiles.append(f"{smiles} (error: {str(e)})")
+            problematic_smiles.append(f"{smiles_str} (error: {str(e)})")
             continue
     
     return descriptors, valid_indices, problematic_smiles
 
-def compute_pairwise_similarities(descriptors):
-    """Compute pairwise similarity matrix"""
+@st.cache_data
+def compute_similarity_matrix(descriptors):
+    """
+    Compute full pairwise similarity matrix efficiently.
+    """
     n_molecules = len(descriptors)
     similarity_matrix = np.zeros((n_molecules, n_molecules), dtype=float)
     
-    for i in range(n_molecules):
-        for j in range(i, n_molecules):
-            if i == j:
-                similarity_matrix[i, j] = 1.0
-            else:
-                try:
-                    sim_value = DataStructs.TanimotoSimilarity(
-                        descriptors[i], descriptors[j]
-                    )
-                    similarity_matrix[i, j] = sim_value
-                    similarity_matrix[j, i] = sim_value
-                except Exception:
-                    similarity_matrix[i, j] = 0.0
-                    similarity_matrix[j, i] = 0.0
+    # Convert descriptors to list for faster iteration
+    fps = list(descriptors)
     
+    # Optimized bulk calculation
+    for i in range(n_molecules):
+        similarity_matrix[i, i] = 1.0 
+        if i < n_molecules - 1:
+            # Calculate similarity of molecule i against all subsequent molecules
+            sims = DataStructs.BulkTanimotoSimilarity(fps[i], fps[i+1:])
+            
+            # Fill the symmetric matrix
+            for idx, sim in enumerate(sims):
+                j = i + 1 + idx
+                similarity_matrix[i, j] = sim
+                similarity_matrix[j, i] = sim
+            
     return similarity_matrix
 
-def categorize_sar_regions(pairs_data, sim_threshold, act_threshold):
-    """Categorize molecular pairs into SAR regions"""
-    categorized_data = pairs_data.copy()
-    
-    # Initialize region classification
-    categorized_data['Zone'] = 'Baseline Regions'
-    
-    # Activity Cliffs classification
-    cliffs_criteria = (
-        categorized_data['Similarity'] > sim_threshold
-    ) & (
-        categorized_data['Activity_Diff'] > act_threshold
-    )
-    categorized_data.loc[cliffs_criteria, 'Zone'] = 'Activity Cliffs'
-    
-    # Consistent SAR regions
-    consistent_criteria = (
-        categorized_data['Similarity'] > sim_threshold
-    ) & (
-        categorized_data['Activity_Diff'] <= act_threshold
-    )
-    categorized_data.loc[consistent_criteria, 'Zone'] = 'Consistent SAR Regions'
-    
-    # Scaffold transitions
-    scaffold_criteria = (
-        categorized_data['Similarity'] <= sim_threshold
-    ) & (
-        categorized_data['Activity_Diff'] <= act_threshold
-    )
-    categorized_data.loc[scaffold_criteria, 'Zone'] = 'Scaffold Transitions'
-    
-    return categorized_data
-
-def perform_advanced_analysis(
-    df, smiles_column, activity_column, id_column, 
-    desc_type, radius_param, n_bits, sim_threshold, 
-    act_threshold, color_scheme, max_pairs, colormap
+@st.cache_data
+def process_landscape_data(
+    df, smiles_col, act_col, id_col, 
+    desc_type, radius, bits, sim_thresh, act_thresh
 ):
-    """Perform advanced molecular landscape analysis"""
+    """
+    Main processing pipeline.
+    Returns a DataFrame of molecular pairs with analysis metrics.
+    """
+    # Clean Data: Remove rows with missing critical values
+    df_clean = df.dropna(subset=[smiles_col, act_col]).copy()
     
-    # Data preparation and validation
-    clean_data = df.dropna(subset=[smiles_column, activity_column]).copy()
-    if len(clean_data) == 0:
-        st.error("No valid data after removing incomplete entries.")
-        return None, None, None
-        
-    # Process activity values
-    try:
-        activity_values = clean_data[activity_column].astype(float).values
-    except Exception as e:
-        st.error(f"Activity data processing failed: {e}")
-        return None, None, None
+    # Extract arrays
+    smiles_arr = df_clean[smiles_col].astype(str).values
+    act_arr = df_clean[act_col].astype(float).values
+    
+    # Handle ID column
+    if id_col != "None" and id_col in df_clean.columns:
+        ids_arr = df_clean[id_col].astype(str).values 
+    else:
+        ids_arr = np.array([f"Mol_{i+1}" for i in range(len(df_clean))])
 
-    molecule_ids = clean_data[id_column].astype(str).values if id_column != "None" else np.array([f"Mol_{i+1}" for i in range(len(clean_data))])
-    smiles_strings = clean_data[smiles_column].astype(str).values
-
-    # Step 1: Generate molecular descriptors
-    st.write(f"### Step 1: Computing {desc_type} molecular representations...")
-    descriptors, valid_indices, invalid_smiles = generate_molecular_descriptors(
-        smiles_strings, desc_type, radius_param, n_bits
+    # 1. Compute Descriptors
+    descriptors, valid_idx, invalid_smiles = generate_molecular_descriptors(
+        smiles_arr, desc_type, radius, bits
     )
     
     if invalid_smiles:
-        st.warning(f"{len(invalid_smiles)} invalid molecular structures identified.")
-        with st.expander("View problematic structures"):
-            for bad_smiles in invalid_smiles[:10]:
-                st.write(bad_smiles)
-            if len(invalid_smiles) > 10:
-                st.write(f"... and {len(invalid_smiles) - 10} additional structures")
+        st.warning(f"Skipped {len(invalid_smiles)} invalid SMILES strings.")
     
-    # Filter to valid entries
-    activity_values = activity_values[valid_indices]
-    molecule_ids = molecule_ids[valid_indices]
-    smiles_strings = smiles_strings[valid_indices]
-    n_valid = len(descriptors)
-    
-    if n_valid < 2:
-        st.error("Minimum of 2 valid molecules required for analysis.")
-        return None, None, None
+    # Filter arrays to keep only valid molecules
+    smiles_arr = smiles_arr[valid_idx]
+    act_arr = act_arr[valid_idx]
+    ids_arr = ids_arr[valid_idx]
+    n_mols = len(descriptors)
 
-    st.success(f"✅ Molecular representations computed for {n_valid} compounds.")
+    if n_mols < 2:
+        return None, "Not enough valid molecules to form pairs."
 
-    # Step 2: Compute similarity matrix
-    st.write("### Step 2: Calculating pairwise molecular similarities...")
-    similarity_matrix = compute_pairwise_similarities(descriptors)
-    st.success(f"✅ Similarity analysis completed for {n_valid} molecules.")
+    # 2. Compute Similarity Matrix
+    sim_matrix = compute_similarity_matrix(descriptors)
 
-    # Step 3: Generate molecular pairs and compute landscape indices
-    st.write("### Step 3: Generating molecular pairs and landscape metrics...")
-    molecular_pairs = []
-    min_distance = 1e-2
+    # 3. Generate Pairs
+    pairs = []
+    min_dist = 1e-3 # Small constant to prevent division by zero in SALI calculation
     
-    total_possible_pairs = n_valid * (n_valid - 1) // 2
-    progress_display = st.empty()
-    progress_indicator = st.progress(0)
+    # Warning for large datasets
+    if n_mols > 1000:
+        st.info(f"Processing large dataset ({n_mols} compounds). Generating ~{n_mols**2//2} pairs...")
     
-    pairs_processed = 0
-    for i in range(n_valid):
-        for j in range(i+1, n_valid):
-            if pairs_processed % 1000 == 0:
-                progress_display.text(f"Processing pairs: {pairs_processed:,}/{total_possible_pairs:,}")
-                progress_indicator.progress(min(pairs_processed / total_possible_pairs, 1.0))
+    for i in range(n_mols):
+        for j in range(i + 1, n_mols):
+            sim = sim_matrix[i, j]
+            act_diff = abs(act_arr[i] - act_arr[j])
             
-            similarity = similarity_matrix[i, j]
-            activity_difference = float(abs(activity_values[i] - activity_values[j]))
-            max_activity = float(max(activity_values[i], activity_values[j]))
-            distance_metric = max(1.0 - similarity, min_distance)
-            landscape_index = activity_difference / distance_metric
-            
-            molecular_pairs.append({
-                "Mol1_idx": i, "Mol2_idx": j,
-                "Mol1_ID": molecule_ids[i], "Mol2_ID": molecule_ids[j],
-                "SMILES1": smiles_strings[i], "SMILES2": smiles_strings[j],
-                "Activity1": activity_values[i], "Activity2": activity_values[j],
-                "Similarity": similarity, "Activity_Diff": activity_difference,
-                "MaxActivity": max_activity, "SALI": landscape_index
+            # Landscape Classification Logic
+            if sim >= sim_thresh and act_diff >= act_thresh:
+                zone = 'Activity Cliffs'
+            elif sim < sim_thresh and act_diff < act_thresh:
+                zone = 'Scaffold Transitions'
+            elif sim >= sim_thresh and act_diff < act_thresh:
+                zone = 'Consistent SAR Regions'
+            else:
+                zone = 'Baseline Regions'
+
+            # SALI Score (Structure-Activity Landscape Index)
+            sali = act_diff / max(1.0 - sim, min_dist)
+
+            pairs.append({
+                "Mol1_ID": ids_arr[i], "Mol2_ID": ids_arr[j],
+                "Similarity": sim, 
+                "Activity_Diff": act_diff,
+                "Max. Activity": max(act_arr[i], act_arr[j]),
+                "SALI": sali,
+                "Zone": zone
             })
-            pairs_processed += 1
-    
-    progress_display.empty()
-    progress_indicator.empty()
-    
-    if not molecular_pairs:
-        st.error("No valid molecular pairs generated. Please verify input data.")
-        return None, None, None
-        
-    pairs_dataframe = pd.DataFrame(molecular_pairs)
-    st.success(f"✅ Generated {len(pairs_dataframe):,} molecular pair comparisons.")
 
-    # Step 4: Classify pairs into landscape regions
-    st.write("### Step 4: Classifying molecular pairs into landscape regions...")
-    classified_data = categorize_sar_regions(
-        pairs_dataframe, sim_threshold, act_threshold
+    pairs_df = pd.DataFrame(pairs)
+    
+    # 4. Calculate Density (if enough points exist)
+    if not pairs_df.empty and len(pairs_df) > 5:
+        try:
+            density, _ = compute_density(pairs_df["Similarity"], pairs_df["Activity_Diff"])
+            pairs_df["Density"] = density
+        except:
+            pairs_df["Density"] = 0.0
+    else:
+        pairs_df["Density"] = 0.0
+
+    return pairs_df, None
+
+# ==============================================================================
+# 3. UI LAYOUT & MAIN LOGIC
+# ==============================================================================
+
+st.title("Molecular Landscape Explorer")
+
+with st.expander("About Structure-Activity Landscape Analysis", expanded=False):
+    st.markdown('''
+    **Molecular Landscape Explorer** helps identify key patterns in molecular data:
+    - **Activity Cliffs**: Structurally similar compounds with significant activity differences.
+    - **SAR Zones**: Regions with predictable structure-activity relationships.
+    - **SAS Map**: Structure-Activity Similarity Map.
+    ''')
+
+# --- SIDEBAR CONFIGURATION ---
+st.sidebar.subheader("Analysis Configuration")
+analysis_mode = st.sidebar.radio("Analysis Mode", ["Basic Landscape", "SAS Map Plot"])
+
+# Initialize default params
+radius_param = 2
+bit_size = 1024
+mol_rep = "ECFP4"
+
+if analysis_mode == "Basic Landscape":
+    st.sidebar.info("Basic mode: Quick visual check with standard settings.")
+    selected_fp = st.sidebar.selectbox("Fingerprint", ['ECFP4', 'ECFP6'])
+    radius_param = 2 if selected_fp == 'ECFP4' else 3
+    sim_cutoff = st.sidebar.slider("Similarity Threshold", 0.5, 1.0, 0.7)
+    act_cutoff = st.sidebar.slider("Activity Diff Threshold", 0.5, 5.0, 1.0)
+    # Map simple selection to full params
+    mol_rep = selected_fp
+
+else:  # SAS Map Plot
+    st.sidebar.markdown("### Molecular Representation")
+    mol_rep = st.sidebar.selectbox("Type", ["ECFP4", "ECFP6", "MACCS"], index=0)
+    
+    if mol_rep.startswith("ECFP"):
+        radius_param = 2 if mol_rep == "ECFP4" else 3
+        bit_size = st.sidebar.selectbox("Bit Dimension", [1024, 2048], index=0)
+    else:
+        radius_param = 0
+        bit_size = 167 # Fixed for MACCS
+
+    st.sidebar.markdown("### Visualization Settings")
+    # UPDATED: Color mapping options including Density
+    viz_color_col = st.sidebar.selectbox(
+        "Color Mapping", 
+        ["SALI", "Max. Activity", "Density"]
     )
     
-    return classified_data, pairs_dataframe, n_valid
+    cmap_name = st.sidebar.selectbox(
+        "Colormap", 
+        ["viridis", "plasma", "inferno", "turbo", "RdYlBu", "jet"],
+        index=0
+    )
+    
+    max_viz_pairs = st.sidebar.number_input("Max pairs to plot (for performance)", 2000, 100000, 10000, 1000)
+    
+    st.sidebar.markdown("### Landscape Thresholds")
+    sim_cutoff = st.sidebar.slider("Similarity Cutoff", 0.1, 0.9, 0.7, 0.05)
+    act_cutoff = st.sidebar.slider("Activity Cutoff", 0.5, 4.0, 1.0, 0.1)
 
-# Data input section
+
+# --- DATA INPUT ---
 st.subheader("Dataset Input")
+uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
 
-# Only allow CSV upload now
-uploaded_data = st.file_uploader("Upload CSV File", type=["csv"])
-
-def read_csv_flexible(file_object):
-    """Read CSV file with automatic delimiter detection"""
+def load_csv(file):
     try:
-        return pd.read_csv(file_object)  # Try comma delimiter
-    except pd.errors.ParserError:
-        return pd.read_csv(file_object, sep=';')  # Try semicolon delimiter
+        return pd.read_csv(file)
+    except:
+        # Fallback for semicolon separated files
+        return pd.read_csv(file, sep=';')
 
-if uploaded_data:
-    try:
-        input_data = read_csv_flexible(uploaded_data)
+if uploaded_file:
+    df_input = load_csv(uploaded_file)
+    
+    if not df_input.empty:
+        st.write("Preview of uploaded data:")
+        st.dataframe(df_input.head())
 
-        if not input_data.empty:
-            st.subheader("Configure Dataset Columns")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            id_col = st.selectbox("ID Column", ["None"] + list(df_input.columns))
+        with col2:
+            smiles_col = st.selectbox("SMILES Column", df_input.columns)
+        with col3:
+            act_col = st.selectbox("Activity Column (e.g. pIC50)", df_input.columns)
 
-            id_column = st.selectbox("Molecule Identifier column:", input_data.columns)
-            smiles_column = st.selectbox("Molecular Structure (SMILES) column:", input_data.columns)
-            activity_column = st.selectbox("Biological Activity column:", input_data.columns)
+        # --- EXECUTION BUTTON ---
+        if st.button(f"🚀 Generate {analysis_mode}"):
+            # Clear previous results to force new analysis
+            st.session_state['analysis_results'] = None
+            
+            with st.spinner("Calculating Molecular Landscape..."):
+                # Unified processing call for both modes
+                # This ensures robustness for both Basic and Advanced modes
+                results, error_msg = process_landscape_data(
+                    df_input, smiles_col, act_col, id_col,
+                    mol_rep, radius_param, bit_size, sim_cutoff, act_cutoff
+                )
+                
+                if error_msg:
+                    st.error(error_msg)
+                else:
+                    # Save to session state
+                    st.session_state['analysis_results'] = results
+                    st.session_state['analysis_mode_state'] = analysis_mode
 
-            if id_column and smiles_column and activity_column:
-                execute_analysis = st.button(f"Execute {analysis_mode} Analysis")
+    # --- RESULTS DISPLAY ---
+    # Only display if results exist in session state
+    if st.session_state['analysis_results'] is not None:
+        results_df = st.session_state['analysis_results']
+        current_mode = st.session_state['analysis_mode_state']
+        
+        st.markdown("---")
+        
+        if current_mode == "SAS Map Plot":
+            st.header("📊 SAS Map Plot Results")
+            
+            # 1. STATISTICS METRICS
+            region_counts = results_df['Zone'].value_counts()
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Activity Cliffs", int(region_counts.get("Activity Cliffs", 0)))
+            m2.metric("Consistent SAR", int(region_counts.get("Consistent SAR Regions", 0)))
+            m3.metric("Scaffold Trans.", int(region_counts.get("Scaffold Transitions", 0)))
+            m4.metric("Baseline Pairs", int(region_counts.get("Baseline Regions", 0)))
+            
+            # 2. INTERACTIVE PLOT
+            # Sub-sample for plotting speed if data is huge
+            if len(results_df) > max_viz_pairs:
+                # REPRODUCIBILITY: Use fixed random_state
+                plot_df = results_df.sample(n=max_viz_pairs, random_state=42)
+                st.caption(f"Note: Displaying a random sample of {max_viz_pairs} pairs for performance.")
+            else:
+                plot_df = results_df
 
-                if execute_analysis:
-                    if analysis_mode == "Basic Landscape":
-                        analysis_data = input_data[[id_column, smiles_column, activity_column]].rename(
-                            columns={
-                                id_column: "Molecule ID", 
-                                smiles_column: "Smiles", 
-                                activity_column: "pIC50"
-                            }
-                        )
-
-                        # FIX: Passed 'fingerprint_size' correctly
-                        landscape_results = analyze_molecular_pairs(
-                            analysis_data, radius_param, fingerprint_size, 
-                            similarity_cutoff, activity_cutoff
-                        )
-
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.write("### Input Dataset")
-                            st.dataframe(analysis_data)
-
-                        with col2:
-                            st.write("### Landscape Analysis Results")
-                            st.dataframe(landscape_results)
-                            results_csv = landscape_results.to_csv(index=False).encode('utf-8')
-                            st.download_button(
-                                label="Download Results", 
-                                data=results_csv, 
-                                file_name='molecular_landscape_results.csv',
-                                mime='text/csv'
-                            )
-
-                        st.subheader("Molecular Landscape Visualization")
-                        # FIX: Passed radius_param explicitly
-                        landscape_plot = create_landscape_visualization(landscape_results, radius_param)
-                        plot_buffer = io.BytesIO()
-                        landscape_plot.savefig(plot_buffer, format="png", bbox_inches="tight")
-                        plot_buffer.seek(0)
-
-                        st.download_button(
-                            label="Download Visualization", 
-                            data=plot_buffer, 
-                            file_name="Molecular_Landscape_Map.png",
-                            mime="image/png"
-                        )
-
-                    else:  # Advanced SAR Analysis
-                        classified_results, pairs_data, molecule_count = perform_advanced_analysis(
-                            input_data, smiles_column, activity_column, id_column, 
-                            molecular_representation, radius_param, bit_size,
-                            similarity_cutoff, activity_cutoff, 
-                            visualization_color, max_visualization_pairs, colormap_option
-                        )
-                        
-                        if classified_results is not None:
-                            # Calculate region distribution
-                            region_distribution = classified_results['Zone'].value_counts()
-                            
-                            # Display region statistics
-                            st.subheader("📊 Landscape Region Distribution")
-                            col1, col2, col3, col4 = st.columns(4)
-                            
-                            with col1:
-                                st.metric("Activity Cliffs", region_distribution.get("Activity Cliffs", 0))
-                            with col2:
-                                st.metric("Consistent SAR", region_distribution.get("Consistent SAR Regions", 0))
-                            with col3:
-                                st.metric("Scaffold Transitions", region_distribution.get("Scaffold Transitions", 0))
-                            with col4:
-                                st.metric("Baseline Regions", region_distribution.get("Baseline Regions", 0))
-
-                            # Results visualization section
-                            st.markdown("---")
-                            st.header("📊 Analysis Visualizations")
-                            
-                            # Modified section: Direct Interactive SALI Plot without tabs
-                            st.subheader("Interactive SALI Landscape")
-                            
-                            # Prepare data for interactive visualization
-                            interactive_data = classified_results
-                            if len(classified_results) > max_visualization_pairs:
-                                st.warning(f"Large dataset - sampling {max_visualization_pairs:,} pairs for interactive view.")
-                                interactive_data = classified_results.sample(
-                                    n=max_visualization_pairs, random_state=42
-                                )
-
-                            # Create interactive plot with custom colormap for SALI/MaxActivity
-                            if visualization_color in ["SALI", "MaxActivity"]:
-                                interactive_fig = px.scatter(
-                                    interactive_data,
-                                    x="Similarity",
-                                    y="Activity_Diff",
-                                    color=visualization_color,
-                                    color_continuous_scale=colormap_option,  # Use selected colormap
-                                    opacity=0.7,
-                                    hover_data=[
-                                        "Mol1_ID", "Mol2_ID", "Similarity", 
-                                        "Activity_Diff", "SALI", "Zone"
-                                    ],
-                                    title=f"Interactive Molecular Landscape ({molecular_representation})",
-                                    width=1000,
-                                    height=650,
-                                )
-                            else:
-                                interactive_fig = px.scatter(
-                                    interactive_data,
-                                    x="Similarity",
-                                    y="Activity_Diff",
-                                    color=visualization_color,
-                                    opacity=0.7,
-                                    hover_data=[
-                                        "Mol1_ID", "Mol2_ID", "Similarity", 
-                                        "Activity_Diff", "SALI", "Zone"
-                                    ],
-                                    title=f"Interactive Molecular Landscape ({molecular_representation})",
-                                    width=1000,
-                                    height=650,
-                                )
-                            
-                            interactive_fig.update_traces(marker=dict(size=8))
-                            
-                            # Update axis labels - larger and bold
-                            interactive_fig.update_xaxes(
-                                title_text="Structural Similarity",
-                                title_font=dict(size=16, family="Arial Black")
-                            )
-                            interactive_fig.update_yaxes(
-                                title_text="Activity Difference",
-                                title_font=dict(size=16, family="Arial Black")
-                            )
-                            
-                            # Add threshold guides
-                            interactive_fig.add_vline(
-                                x=similarity_cutoff, line_dash="dash", line_color="red"
-                            )
-                            interactive_fig.add_hline(
-                                y=activity_cutoff, line_dash="dash", line_color="blue"
-                            )
-                            
-                            st.plotly_chart(interactive_fig, use_container_width=True)
-
-                            # Results download section
-                            st.markdown("---")
-                            st.header("📥 Download Analysis Results")
-                            
-                            # Download options
-                            download_col1, download_col2 = st.columns(2)
-                            
-                            with download_col1:
-                                # Complete results download
-                                complete_csv = classified_results.to_csv(index=False).encode('utf-8')
-                                st.download_button(
-                                    label="📥 Download Complete Results (CSV)",
-                                    data=complete_csv,
-                                    file_name=f"molecular_landscape_analysis_{molecular_representation}.csv",
-                                    mime="text/csv"
-                                )
-                            
-                            with download_col2:
-                                # Activity cliffs only
-                                cliffs_data = classified_results[
-                                    classified_results['Zone'] == 'Activity Cliffs'
-                                ]
-                                cliffs_csv = cliffs_data.to_csv(index=False).encode('utf-8')
-                                st.download_button(
-                                    label="📥 Activity Cliffs Data (CSV)",
-                                    data=cliffs_csv,
-                                    file_name=f"activity_cliffs_{molecular_representation}.csv",
-                                    mime="text/csv"
-                                )
-
-                            st.success("🎉 Analysis completed successfully! Download results using the buttons above.")
-
-        else:
-            st.error("The provided file is empty or cannot be processed.")
-
-    except Exception as e:
-        st.error(f"Analysis error: {e}")
-
-# Information section
-info_section = st.expander("Additional Information", expanded=False)
-with info_section:
-    st.write('''
+            # Create Plotly Figure
+            fig = px.scatter(
+                plot_df,
+                x="Similarity",
+                y="Activity_Diff",
+                color=viz_color_col,  # User selected: SALI, Max. Activity, or Density
+                color_continuous_scale=cmap_name,
+                title=f"SAS Map: Colored by {viz_color_col}",
+                hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
+                opacity=0.7,
+                render_mode='webgl' # Significant performance boost for large scatter plots
+            )
+            
+            # Add Threshold Lines
+            fig.add_vline(x=sim_cutoff, line_dash="dash", line_color="gray", annotation_text="Sim. Cutoff")
+            fig.add_hline(y=act_cutoff, line_dash="dash", line_color="gray", annotation_text="Act. Cutoff")
+            
+            # Customize Axis Layout
+            fig.update_layout(
+                xaxis_title="Structural Similarity (Tanimoto)",
+                yaxis_title="Activity Difference",
+                height=700,
+                legend_title_text=viz_color_col,
+                font=dict(family="Arial", size=12)
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # 3. DOWNLOADS
+            st.subheader("📥 Downloads")
+            
+            d1, d2 = st.columns(2)
+            
+            # CSV Download
+            csv_data = results_df.to_csv(index=False).encode('utf-8')
+            with d1:
+                st.download_button(
+                    label="Download Full Results (CSV)",
+                    data=csv_data,
+                    file_name="sas_map_results.csv",
+                    mime="text/csv"
+                )
+            
+            # HTML Plot Download
+            # We write the fig to a buffer
+            buffer = io.StringIO()
+            fig.write_html(buffer, include_plotlyjs='cdn')
+            html_bytes = buffer.getvalue().encode()
+            
+            with d2:
+                st.download_button(
+                    label="Download Interactive Plot (HTML)",
+                    data=html_bytes,
+                    file_name="sas_map_plot.html",
+                    mime="text/html"
+                )
+                
+        else: # Basic Landscape Mode
+            st.subheader("Basic Landscape Plot")
+            
+            # Static Matplotlib Plot
+            fig, ax = plt.subplots(figsize=(10, 6))
+            colors = {
+                'Activity Cliffs': 'red', 
+                'Consistent SAR Regions': 'green', 
+                'Scaffold Transitions': 'purple', 
+                'Baseline Regions': 'blue'
+            }
+            
+            # Plot each zone
+            for zone, color in colors.items():
+                subset = results_df[results_df['Zone'] == zone]
+                if not subset.empty:
+                    ax.scatter(
+                        subset['Similarity'], 
+                        subset['Activity_Diff'], 
+                        c=color, 
+                        label=zone, 
+                        alpha=0.6,
+                        edgecolors='none'
+                    )
+            
+            ax.axvline(sim_cutoff, c='k', ls='--', alpha=0.5)
+            ax.axhline(act_cutoff, c='k', ls='--', alpha=0.5)
+            ax.set_xlabel("Structural Similarity")
+            ax.set_ylabel("Activity Difference")
+            ax.set_title("Basic Structure-Activity Landscape")
+            ax.legend()
+            
+            st.pyplot(fig)
+            
+            # Simple CSV Download
+            csv_data = results_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                "Download Results (CSV)", 
+                csv_data, 
+                "basic_landscape.csv", 
+                "text/csv"
+            )
              #### Technical Support 
              For technical issues or suggestions, please create an issue on our 
              [project repository](https://github.com/dasguptaindra/SALI-MAP-Analysis).
@@ -618,4 +450,5 @@ with info_section:
              relationships in compound datasets, supporting drug discovery and 
              chemical optimization efforts.
              ''')
+
 
