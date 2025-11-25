@@ -174,7 +174,7 @@ def process_landscape_data(
 
 st.title("Molecular Landscape Explorer")
 
-st.sidebar.subheader("Analysis Configuration")
+st.sidebar.subheader("Techinal support")
 st.sidebar.markdown(
     """For technical issues or suggestions, please create an issue on our 
     [project repository](https://github.com/dasguptaindra/Structure-Activity-Landscape-Analysis)."""
@@ -374,4 +374,5 @@ if uploaded_file:
             
             csv_data = results_df.to_csv(index=False).encode('utf-8')
             st.download_button("Download CSV", csv_data, "basic_results.csv", "text/csv")
+
 
