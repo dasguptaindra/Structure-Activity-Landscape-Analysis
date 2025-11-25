@@ -338,7 +338,7 @@ if uploaded_file is not None:
     with c_set1:
         bit_size = 2048
         if "MACCS" not in fp_type:
-            bit_size = st.selectbox("Bit Length", [512, 1024, 2048], index=1)
+            bit_size = st.selectbox("Bit Length", [512, 1024, 2048], index=2)
         else:
             st.info("MACCS uses fixed 166 bits.")
 
@@ -555,6 +555,7 @@ st.markdown(
     "</div>",
     unsafe_allow_html=True
 )
+
 
 
 
