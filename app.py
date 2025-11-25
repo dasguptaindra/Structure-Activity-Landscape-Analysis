@@ -32,6 +32,10 @@ if 'file_uploaded' not in st.session_state:
     st.session_state['file_uploaded'] = False
 if 'columns_selected' not in st.session_state:
     st.session_state['columns_selected'] = False
+if 'validation_passed' not in st.session_state:
+    st.session_state['validation_passed'] = False
+if 'df_input' not in st.session_state:
+    st.session_state['df_input'] = None
 
 # ==============================================================================
 # 2. CORE COMPUTATIONAL FUNCTIONS (CACHED)
@@ -183,7 +187,7 @@ def process_landscape_data(
             act_diff = abs(act_arr[i] - act_arr[j])
             
             # -------------------------------------------------------
-            # ZONE CLASSIFICATION LOGIC - FIXED TYPO
+            # ZONE CLASSIFICATION LOGIC - FIXED AND CONSISTENT
             # -------------------------------------------------------
             if sim >= sim_thresh and act_diff >= act_thresh:
                 zone = 'Activity Cliffs'
@@ -192,7 +196,7 @@ def process_landscape_data(
             elif sim >= sim_thresh and act_diff < act_thresh:
                 zone = 'Smooth SAR'
             else:
-                zone = 'Nondescriptive Zone'  # FIXED: No space
+                zone = 'Nondescriptive Zone'
 
             # Calculate SALI with safe division
             denominator = max(1.0 - sim, min_dist)
@@ -279,16 +283,17 @@ if uploaded_file is not None:
     st.session_state['file_uploaded'] = True
     
     try:
+        # Read CSV without converting everything to strings upfront
         df_input = pd.read_csv(uploaded_file)
-        # Clean the dataframe by converting all columns to string first, then handle specific types
-        df_input = df_input.astype(str)
     except Exception as e:
         try:
             df_input = pd.read_csv(uploaded_file, sep=';')
-            df_input = df_input.astype(str)
         except Exception as e:
             st.error(f"Error reading file: {str(e)}")
             st.stop()
+    
+    # Store in session state
+    st.session_state['df_input'] = df_input
     
     if df_input.empty:
         st.warning("Uploaded file is empty")
@@ -345,7 +350,7 @@ if uploaded_file is not None:
     if columns_properly_selected:
         st.session_state['columns_selected'] = True
         
-        # Now run validation checks only after proper column selection
+        # Initialize validation variables
         validation_passed = True
         validation_errors = []
         
@@ -370,12 +375,15 @@ if uploaded_file is not None:
             else:
                 # Try to convert to numeric to check if it's actually numeric data
                 try:
-                    # Convert back to numeric for validation
+                    # Convert to numeric for validation
                     pd.to_numeric(act_data)
                 except (ValueError, TypeError):
                     validation_errors.append(f"Activity Column '{act_col}' contains non-numeric values")
                     validation_passed = False
 
+        # Store validation result
+        st.session_state['validation_passed'] = validation_passed
+        
         # Display validation errors only if they exist
         if not validation_passed:
             st.error("**Validation Errors:**")
@@ -393,13 +401,15 @@ if uploaded_file is not None:
             }
     else:
         st.session_state['columns_selected'] = False
+        st.session_state['validation_passed'] = False
         if smiles_col and act_col and smiles_col == act_col:
             st.warning("⚠️ Please select different columns for SMILES and Activity")
         else:
             st.info("👆 Please select all required columns (SMILES and Activity must be different)")
 
     # Only proceed to fingerprint selection if columns are properly selected and validated
-    if st.session_state.get('columns_selected', False) and validation_passed:
+    if (st.session_state.get('columns_selected', False) and 
+        st.session_state.get('validation_passed', False)):
         
         # ==============================================================================
         # 5. FINGERPRINT SELECTION & ANALYSIS SETTINGS
@@ -505,15 +515,22 @@ if uploaded_file is not None:
             st.session_state['analysis_results'] = None  # Clear old results
             
             with st.spinner("Calculating molecular descriptors and similarities..."):
+                # Get column mapping from session state
+                col_mapping = st.session_state['column_mapping']
+                id_col = col_mapping['id_col']
+                smiles_col = col_mapping['smiles_col']
+                act_col = col_mapping['act_col']
+                
                 # Convert activity column to numeric for processing
                 try:
-                    df_input[act_col] = pd.to_numeric(df_input[act_col], errors='coerce')
+                    df_input_processed = df_input.copy()
+                    df_input_processed[act_col] = pd.to_numeric(df_input_processed[act_col], errors='coerce')
                 except Exception as e:
                     st.error(f"Error converting activity data to numeric: {str(e)}")
                     st.stop()
                     
                 results, error_msg = process_landscape_data(
-                    df_input, smiles_col, act_col, id_col,
+                    df_input_processed, smiles_col, act_col, id_col,
                     mol_rep, bit_size, sim_cutoff, act_cutoff
                 )
                 
@@ -530,94 +547,115 @@ if uploaded_file is not None:
         # ==============================================================================
         
         if st.session_state['analysis_results'] is not None:
-            results_df = st.session_state['analysis_results']
-            
-            st.markdown("---")
-            st.header(f"📊 SAS Map Plot Results - {mol_rep}")
-            
-            # Stats with Zone Names
-            rc = results_df['Zone'].value_counts()
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Activity Cliffs", int(rc.get("Activity Cliffs", 0)))
-            c2.metric("Smooth SAR", int(rc.get("Smooth SAR", 0)))
-            c3.metric("Similarity Cliffs", int(rc.get("Similarity Cliffs", 0)))
-            c4.metric("Nondescriptive Zone", int(rc.get("Nondescriptive Zone", 0)))
-            
-            # Plotting - ALWAYS PLOT ALL PAIRS
-            plot_df = results_df.copy()
-
-            # FIXED: Ensure Zone names are consistent
-            plot_df['Zone'] = plot_df['Zone'].str.strip()  # Remove any extra spaces
-            plot_df['Zone'] = plot_df['Zone'].replace('None descriptive Zone', 'Nondescriptive Zone')  # Fix the typo
-            
-            # Custom color mapping for zones with CORRECT spelling
-            zone_colors = {
-                'Activity Cliffs': 'red',
-                'Smooth SAR': 'green', 
-                'Similarity Cliffs': 'blue',
-                'Nondescriptive Zone': 'orange'
-            }
-
-            # Handle categorical vs continuous color mapping
-            if viz_color_col == "Zone":
-                # Ensure all zones are properly mapped
-                available_zones = plot_df['Zone'].unique()
-                for zone in available_zones:
-                    if zone not in zone_colors:
-                        # Assign a default color for any unexpected zones
-                        zone_colors[zone] = 'gray'
+            try:
+                results_df = st.session_state['analysis_results']
                 
-                fig = px.scatter(
-                    plot_df,
-                    x="Similarity",
-                    y="Activity_Diff",
-                    color="Zone",
-                    color_discrete_map=zone_colors,
-                    title=f"SAS Map ({mol_rep}): Colored by Zone",
-                    hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
-                    opacity=0.7,
-                    render_mode='webgl',
-                    category_orders={"Zone": ["Activity Cliffs", "Smooth SAR", "Similarity Cliffs", "Nondescriptive Zone"]}
-                )
-            else:
-                # For continuous color scales, ensure data is valid
-                if viz_color_col in plot_df.columns:
-                    plot_df_clean = plot_df.copy()
+                st.markdown("---")
+                st.header(f"📊 SAS Map Plot Results - {mol_rep}")
+                
+                # Stats with Zone Names
+                rc = results_df['Zone'].value_counts()
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Activity Cliffs", int(rc.get("Activity Cliffs", 0)))
+                c2.metric("Smooth SAR", int(rc.get("Smooth SAR", 0)))
+                c3.metric("Similarity Cliffs", int(rc.get("Similarity Cliffs", 0)))
+                c4.metric("Nondescriptive Zone", int(rc.get("Nondescriptive Zone", 0)))
+                
+                # Plotting - ALWAYS PLOT ALL PAIRS
+                plot_df = results_df.copy()
+
+                # Ensure Zone names are consistent
+                plot_df['Zone'] = plot_df['Zone'].str.strip()  # Remove any extra spaces
+                
+                # Fix any remaining zone name inconsistencies
+                zone_name_mapping = {
+                    'None descriptive Zone': 'Nondescriptive Zone',
+                    'None descriptive zone': 'Nondescriptive Zone',
+                    'Nondescriptive zone': 'Nondescriptive Zone'
+                }
+                plot_df['Zone'] = plot_df['Zone'].replace(zone_name_mapping)
+
+                # Custom color mapping for zones with CORRECT spelling
+                zone_colors = {
+                    'Activity Cliffs': 'red',
+                    'Smooth SAR': 'green', 
+                    'Similarity Cliffs': 'blue',
+                    'Nondescriptive Zone': 'orange'
+                }
+
+                # Handle categorical vs continuous color mapping
+                if viz_color_col == "Zone":
+                    # Ensure all zones are properly mapped
+                    available_zones = plot_df['Zone'].unique()
+                    for zone in available_zones:
+                        if zone not in zone_colors:
+                            # Assign a default color for any unexpected zones
+                            zone_colors[zone] = 'gray'
                     
-                    if viz_color_col == "SALI":
-                        # Handle SALI specifically
-                        plot_df_clean[viz_color_col] = plot_df_clean[viz_color_col].replace([np.inf, -np.inf], np.nan)
-                        if plot_df_clean[viz_color_col].isna().any():
-                            median_val = plot_df_clean[viz_color_col].median()
-                            plot_df_clean[viz_color_col] = plot_df_clean[viz_color_col].fillna(median_val)
-                    
-                    elif viz_color_col == "Density":
-                        # Handle Density
-                        plot_df_clean[viz_color_col] = plot_df_clean[viz_color_col].replace([np.inf, -np.inf], np.nan)
-                        if plot_df_clean[viz_color_col].isna().any():
-                            # For density, drop NaN values
+                    fig = px.scatter(
+                        plot_df,
+                        x="Similarity",
+                        y="Activity_Diff",
+                        color="Zone",
+                        color_discrete_map=zone_colors,
+                        title=f"SAS Map ({mol_rep}): Colored by Zone",
+                        hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
+                        opacity=0.7,
+                        render_mode='webgl',
+                        category_orders={"Zone": ["Activity Cliffs", "Smooth SAR", "Similarity Cliffs", "Nondescriptive Zone"]}
+                    )
+                else:
+                    # For continuous color scales, ensure data is valid
+                    if viz_color_col in plot_df.columns:
+                        plot_df_clean = plot_df.copy()
+                        
+                        if viz_color_col == "SALI":
+                            # Handle SALI specifically
+                            plot_df_clean[viz_color_col] = plot_df_clean[viz_color_col].replace([np.inf, -np.inf], np.nan)
+                            if plot_df_clean[viz_color_col].isna().any():
+                                median_val = plot_df_clean[viz_color_col].median()
+                                plot_df_clean[viz_color_col] = plot_df_clean[viz_color_col].fillna(median_val)
+                        
+                        elif viz_color_col == "Density":
+                            # Handle Density
+                            plot_df_clean[viz_color_col] = plot_df_clean[viz_color_col].replace([np.inf, -np.inf], np.nan)
+                            if plot_df_clean[viz_color_col].isna().any():
+                                # For density, drop NaN values
+                                plot_df_clean = plot_df_clean.dropna(subset=[viz_color_col])
+                        
+                        elif viz_color_col == "Max_Activity":
+                            # Handle Max_Activity
+                            plot_df_clean[viz_color_col] = pd.to_numeric(plot_df_clean[viz_color_col], errors='coerce')
                             plot_df_clean = plot_df_clean.dropna(subset=[viz_color_col])
-                    
-                    elif viz_color_col == "Max_Activity":
-                        # Handle Max_Activity
-                        plot_df_clean[viz_color_col] = pd.to_numeric(plot_df_clean[viz_color_col], errors='coerce')
-                        plot_df_clean = plot_df_clean.dropna(subset=[viz_color_col])
-                    
-                    # Only create plot if we have valid data
-                    if not plot_df_clean.empty and len(plot_df_clean) > 1:
-                        fig = px.scatter(
-                            plot_df_clean,
-                            x="Similarity",
-                            y="Activity_Diff",
-                            color=viz_color_col, 
-                            color_continuous_scale=cmap_name,
-                            title=f"SAS Map ({mol_rep}): Colored by {viz_color_col}",
-                            hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
-                            opacity=0.7,
-                            render_mode='webgl'
-                        )
+                        
+                        # Only create plot if we have valid data
+                        if not plot_df_clean.empty and len(plot_df_clean) > 1:
+                            fig = px.scatter(
+                                plot_df_clean,
+                                x="Similarity",
+                                y="Activity_Diff",
+                                color=viz_color_col, 
+                                color_continuous_scale=cmap_name,
+                                title=f"SAS Map ({mol_rep}): Colored by {viz_color_col}",
+                                hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
+                                opacity=0.7,
+                                render_mode='webgl'
+                            )
+                        else:
+                            st.warning(f"Not enough valid data for {viz_color_col} coloring. Falling back to Zone coloring.")
+                            fig = px.scatter(
+                                plot_df,
+                                x="Similarity",
+                                y="Activity_Diff",
+                                color="Zone",
+                                color_discrete_map=zone_colors,
+                                title=f"SAS Map ({mol_rep}): Colored by Zone",
+                                hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
+                                opacity=0.7,
+                                render_mode='webgl'
+                            )
                     else:
-                        st.warning(f"Not enough valid data for {viz_color_col} coloring. Falling back to Zone coloring.")
+                        st.error(f"Column '{viz_color_col}' not found in results")
                         fig = px.scatter(
                             plot_df,
                             x="Similarity",
@@ -629,66 +667,57 @@ if uploaded_file is not None:
                             opacity=0.7,
                             render_mode='webgl'
                         )
-                else:
-                    st.error(f"Column '{viz_color_col}' not found in results")
-                    fig = px.scatter(
-                        plot_df,
-                        x="Similarity",
-                        y="Activity_Diff",
-                        color="Zone",
-                        color_discrete_map=zone_colors,
-                        title=f"SAS Map ({mol_rep}): Colored by Zone",
-                        hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
-                        opacity=0.7,
-                        render_mode='webgl'
+                
+                fig.add_vline(x=sim_cutoff, line_dash="dash", line_color="gray")
+                fig.add_hline(y=act_cutoff, line_dash="dash", line_color="gray")
+                
+                # PLOTLY FONT STYLING (Times New Roman)
+                fig.update_layout(
+                    height=700,
+                    xaxis_title="Similarity",
+                    yaxis_title="Activity Difference",
+                    font=dict(family="Times New Roman", size=16),
+                    title_font=dict(family="Times New Roman", size=24),
+                    xaxis=dict(
+                        title_font=dict(family="Times New Roman", size=20),
+                        tickfont=dict(family="Times New Roman", size=16),
+                        range=[0, 1]  # Fixed range for similarity
+                    ),
+                    yaxis=dict(
+                        title_font=dict(family="Times New Roman", size=20),
+                        tickfont=dict(family="Times New Roman", size=16)
+                    ),
+                    legend=dict(
+                        title_font=dict(family="Times New Roman", size=14),
+                        font=dict(family="Times New Roman", size=12)
                     )
-            
-            fig.add_vline(x=sim_cutoff, line_dash="dash", line_color="gray")
-            fig.add_hline(y=act_cutoff, line_dash="dash", line_color="gray")
-            
-            # PLOTLY FONT STYLING (Times New Roman)
-            fig.update_layout(
-                height=700,
-                xaxis_title="Similarity",
-                yaxis_title="Activity Difference",
-                font=dict(family="Times New Roman", size=16),
-                title_font=dict(family="Times New Roman", size=24),
-                xaxis=dict(
-                    title_font=dict(family="Times New Roman", size=20),
-                    tickfont=dict(family="Times New Roman", size=16),
-                    range=[0, 1]  # Fixed range for similarity
-                ),
-                yaxis=dict(
-                    title_font=dict(family="Times New Roman", size=20),
-                    tickfont=dict(family="Times New Roman", size=16)
-                ),
-                legend=dict(
-                    title_font=dict(family="Times New Roman", size=14),
-                    font=dict(family="Times New Roman", size=12)
                 )
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Show zone distribution only
-            st.subheader("Zone Distribution")
-            zone_dist = results_df['Zone'].value_counts().reset_index()
-            zone_dist.columns = ['Zone', 'Count']
-            zone_dist['Percentage'] = (zone_dist['Count'] / len(results_df) * 100).round(2)
-            safe_dataframe_display(zone_dist)
-            
-            # Downloads
-            csv_data = results_df.to_csv(index=False).encode('utf-8')
-            
-            buffer = io.StringIO()
-            fig.write_html(buffer, include_plotlyjs='cdn')
-            html_bytes = buffer.getvalue().encode()
-            
-            d1, d2 = st.columns(2)
-            with d1:
-                st.download_button("Download Data (CSV)", csv_data, f"sas_map_results_{mol_rep}.csv", "text/csv")
-            with d2:
-                st.download_button("Download Plot (HTML)", html_bytes, f"sas_map_plot_{mol_rep}.html", "text/html")
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Show zone distribution only
+                st.subheader("Zone Distribution")
+                zone_dist = results_df['Zone'].value_counts().reset_index()
+                zone_dist.columns = ['Zone', 'Count']
+                zone_dist['Percentage'] = (zone_dist['Count'] / len(results_df) * 100).round(2)
+                safe_dataframe_display(zone_dist)
+                
+                # Downloads
+                csv_data = results_df.to_csv(index=False).encode('utf-8')
+                
+                buffer = io.StringIO()
+                fig.write_html(buffer, include_plotlyjs='cdn')
+                html_bytes = buffer.getvalue().encode()
+                
+                d1, d2 = st.columns(2)
+                with d1:
+                    st.download_button("Download Data (CSV)", csv_data, f"sas_map_results_{mol_rep}.csv", "text/csv")
+                with d2:
+                    st.download_button("Download Plot (HTML)", html_bytes, f"sas_map_plot_{mol_rep}.html", "text/html")
+                    
+            except Exception as e:
+                st.error(f"Error displaying results: {str(e)}")
+                st.info("Try clearing the cache and running the analysis again.")
 
 else:
     st.info("👆 Please upload a CSV file to begin analysis")
