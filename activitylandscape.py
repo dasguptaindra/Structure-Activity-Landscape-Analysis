@@ -588,8 +588,6 @@ else:
     # Welcome screen when no file is uploaded
     st.markdown("""
     ## Welcome to the Activity Landscape Explorer!
-    
-    This application helps you analyze Structure-Activity Relationships (SAR) through Activity Landscape Modelling.
     """)
 
     
@@ -627,4 +625,5 @@ with footer_col3:
         "</div>",
         unsafe_allow_html=True
     )
+
 
