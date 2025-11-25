@@ -26,6 +26,8 @@ if 'analysis_results' not in st.session_state:
     st.session_state['analysis_results'] = None
 if 'column_mapping' not in st.session_state:
     st.session_state['column_mapping'] = {}
+if 'selected_fp' not in st.session_state:
+    st.session_state['selected_fp'] = None
 
 # ==============================================================================
 # 2. CORE COMPUTATIONAL FUNCTIONS (CACHED)
@@ -247,6 +249,25 @@ def process_landscape_data(
 
     return pairs_df, None
 
+def safe_dataframe_display(df, max_rows=5):
+    """Safely display dataframe with proper type handling."""
+    try:
+        # Create a copy to avoid modifying original
+        display_df = df.head(max_rows).copy()
+        
+        # Convert all columns to string to avoid Arrow serialization issues
+        for col in display_df.columns:
+            display_df[col] = display_df[col].astype(str)
+            
+        st.dataframe(display_df)
+        return True
+    except Exception as e:
+        st.error(f"Could not display dataframe preview: {str(e)}")
+        # Fallback: show basic information
+        st.write(f"Data shape: {df.shape}")
+        st.write("Columns:", list(df.columns))
+        return False
+
 # ==============================================================================
 # 3. UI LAYOUT
 # ==============================================================================
@@ -269,9 +290,12 @@ uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
 if uploaded_file is not None:
     try:
         df_input = pd.read_csv(uploaded_file)
+        # Clean the dataframe by converting all columns to string first, then handle specific types
+        df_input = df_input.astype(str)
     except Exception as e:
         try:
             df_input = pd.read_csv(uploaded_file, sep=';')
+            df_input = df_input.astype(str)
         except Exception as e:
             st.error(f"Error reading file: {str(e)}")
             st.stop()
@@ -296,10 +320,19 @@ if uploaded_file is not None:
     with col3:
         act_col = st.selectbox("Activity Column *", available_columns)
     
-    # Show column preview
+    # Show column preview with safe display
     st.write("**Column Preview:**")
-    preview_df = df_input[[smiles_col, act_col] + ([id_col] if id_col != "None" else [])].head()
-    st.dataframe(preview_df)
+    try:
+        # Create preview with selected columns
+        preview_columns = [smiles_col, act_col]
+        if id_col != "None":
+            preview_columns.append(id_col)
+        
+        preview_df = df_input[preview_columns].head()
+        safe_dataframe_display(preview_df)
+    except Exception as e:
+        st.error(f"Could not display preview: {str(e)}")
+        st.write("Please ensure the selected columns exist in your data.")
     
     # Validation checks
     validation_passed = True
@@ -316,25 +349,28 @@ if uploaded_file is not None:
     
     # Check for valid data in selected columns
     if smiles_col in df_input.columns:
-        if df_input[smiles_col].isna().all():
+        smiles_data = df_input[smiles_col].dropna()
+        if smiles_data.empty:
             validation_errors.append(f"SMILES Column '{smiles_col}' contains only empty values")
             validation_passed = False
         else:
             # Quick check for valid SMILES
-            sample_smiles = df_input[smiles_col].dropna().iloc[0]
-            if Chem.MolFromSmiles(str(sample_smiles)) is None:
+            sample_smiles = str(smiles_data.iloc[0]).strip()
+            if not sample_smiles or Chem.MolFromSmiles(sample_smiles) is None:
                 validation_errors.append(f"Sample SMILES '{sample_smiles}' appears to be invalid")
                 validation_passed = False
     
     if act_col in df_input.columns:
-        if df_input[act_col].isna().all():
+        act_data = df_input[act_col].dropna()
+        if act_data.empty:
             validation_errors.append(f"Activity Column '{act_col}' contains only empty values")
             validation_passed = False
         else:
             # Try to convert to numeric to check if it's actually numeric data
             try:
-                pd.to_numeric(df_input[act_col].dropna())
-            except ValueError:
+                # Convert back to numeric for validation
+                pd.to_numeric(act_data)
+            except (ValueError, TypeError):
                 validation_errors.append(f"Activity Column '{act_col}' contains non-numeric values")
                 validation_passed = False
 
@@ -372,23 +408,22 @@ if uploaded_file is not None:
     fp_tabs = st.tabs(list(fp_categories.keys()))
     
     selected_fingerprint = None
-    fingerprint_params = {}
     
     for i, (category, fingerprints) in enumerate(fp_categories.items()):
         with fp_tabs[i]:
             st.write(f"**{category}**")
             
             for fp in fingerprints:
-                if st.button(f"Select {fp}", key=f"btn_{fp}"):
-                    selected_fingerprint = fp
+                if st.button(f"Select {fp}", key=f"btn_{fp}", use_container_width=True):
                     st.session_state['selected_fp'] = fp
+                    st.rerun()
             
             # Show which fingerprint is currently selected
-            if 'selected_fp' in st.session_state and st.session_state['selected_fp'] in fingerprints:
+            if st.session_state.get('selected_fp') in fingerprints:
                 st.success(f"✅ Currently selected: **{st.session_state['selected_fp']}**")
     
     # If no fingerprint selected yet, show message
-    if 'selected_fp' not in st.session_state:
+    if not st.session_state.get('selected_fp'):
         st.info("👆 Please select a fingerprint type from the tabs above")
         st.stop()
     
@@ -491,6 +526,13 @@ if uploaded_file is not None:
         st.session_state['analysis_results'] = None  # Clear old results
         
         with st.spinner("Calculating molecular descriptors and similarities..."):
+            # Convert activity column to numeric for processing
+            try:
+                df_input[act_col] = pd.to_numeric(df_input[act_col], errors='coerce')
+            except Exception as e:
+                st.error(f"Error converting activity data to numeric: {str(e)}")
+                st.stop()
+                
             results, error_msg = process_landscape_data(
                 df_input, smiles_col, act_col, id_col,
                 mol_rep, radius_param, bit_size, sim_cutoff, act_cutoff
@@ -614,7 +656,7 @@ if uploaded_file is not None:
         zone_dist = results_df['Zone'].value_counts().reset_index()
         zone_dist.columns = ['Zone', 'Count']
         zone_dist['Percentage'] = (zone_dist['Count'] / len(results_df) * 100).round(2)
-        st.dataframe(zone_dist)
+        safe_dataframe_display(zone_dist)
         
         # Downloads
         csv_data = results_df.to_csv(index=False).encode('utf-8')
