@@ -639,9 +639,3 @@ with footer_col3:
         unsafe_allow_html=True
     )
 
-# Quick Help Button at bottom
-st.markdown("---")
-if st.button("💬 Quick Help", key="bottom_help"):
-    st.session_state['show_help'] = True
-    st.rerun()
-
