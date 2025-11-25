@@ -24,6 +24,8 @@ sns.set_style("whitegrid")
 # Initialize Session State
 if 'analysis_results' not in st.session_state:
     st.session_state['analysis_results'] = None
+if 'column_mapping' not in st.session_state:
+    st.session_state['column_mapping'] = {}
 
 # ==============================================================================
 # 2. CORE COMPUTATIONAL FUNCTIONS (CACHED)
@@ -257,105 +259,10 @@ st.sidebar.markdown(
     [project repository](https://github.com/dasguptaindra/Structure-Activity-Landscape-Analysis)."""
 )
 
-# Parameters
-st.sidebar.markdown("### Molecular Representation")
+# ==============================================================================
+# 4. DATA INPUT & COLUMN MAPPING
+# ==============================================================================
 
-# Fingerprint categories
-fp_categories = {
-    "Extended Connectivity Fingerprints (ECFP)": ["ECFP4", "ECFP6", "ECFP8", "ECFP10"],
-    "Functional Connectivity Fingerprints (FCFP)": ["FCFP4", "FCFP6"],
-    "Morgan Fingerprints (Advanced)": ["Morgan-Count", "Morgan-Chirality", "Morgan-Features"],
-    "Other Fingerprints": ["MACCS", "RDKit", "Avalon", "AtomPairs", "TopologicalTorsions", "Pattern"]
-}
-
-# Flatten the categories for the selectbox
-all_fingerprints = []
-for category, fps in fp_categories.items():
-    all_fingerprints.extend(fps)
-
-mol_rep = st.sidebar.selectbox("Fingerprint Type", all_fingerprints, index=0)
-
-# Set default parameters based on fingerprint type
-default_bits = 2048
-default_radius = 2
-
-if mol_rep in ["ECFP4", "FCFP4"]:
-    default_radius = 2
-elif mol_rep in ["ECFP6", "FCFP6"]:
-    default_radius = 3
-elif mol_rep == "ECFP8":
-    default_radius = 4
-elif mol_rep == "ECFP10":
-    default_radius = 5
-
-# Show radius parameter for fingerprints that use it
-if mol_rep in ["ECFP4", "ECFP6", "ECFP8", "ECFP10", "FCFP4", "FCFP6", 
-               "Morgan-Count", "Morgan-Chirality", "Morgan-Features"]:
-    radius_param = st.sidebar.slider("Radius Parameter", 1, 6, default_radius, 1,
-                                   help="Radius for Morgan fingerprint generation. Larger values capture larger molecular environments.")
-else:
-    radius_param = default_radius
-
-# Bit size selection
-if mol_rep in ["ECFP4", "ECFP6", "ECFP8", "ECFP10", "FCFP4", "FCFP6", 
-               "RDKit", "Avalon", "AtomPairs", "TopologicalTorsions", "Pattern",
-               "Morgan-Count", "Morgan-Chirality", "Morgan-Features"]:
-    bit_size = st.sidebar.selectbox("Bit Dimension", [512, 1024, 2048, 4096], index=2)
-else:
-    # MACCS has fixed size
-    bit_size = 167
-
-# Display fingerprint description
-fp_descriptions = {
-    "ECFP4": "Extended Connectivity Fingerprint (radius 2) - captures atom environments up to 2 bonds away",
-    "ECFP6": "Extended Connectivity Fingerprint (radius 3) - captures larger atom environments",
-    "ECFP8": "Extended Connectivity Fingerprint (radius 4) - very large atom environments",
-    "ECFP10": "Extended Connectivity Fingerprint (radius 5) - extensive atom environments",
-    "FCFP4": "Functional Class Fingerprint (radius 2) - based on pharmacophoric features",
-    "FCFP6": "Functional Class Fingerprint (radius 3) - larger pharmacophoric features",
-    "MACCS": "MACCS Keys - 166 predefined structural fragments",
-    "RDKit": "RDKit topological fingerprint - based on hashed atom paths",
-    "Avalon": "Avalon fingerprint - linear fingerprints for chemical structures",
-    "AtomPairs": "Atom Pair fingerprint - captures pairs of atoms and their distances",
-    "TopologicalTorsions": "Topological Torsion fingerprint - captures linear sequences of 4 atoms",
-    "Pattern": "Pattern fingerprint - based on SMARTS patterns",
-    "Morgan-Count": "Morgan count-based fingerprint - uses counts instead of bits",
-    "Morgan-Chirality": "Morgan fingerprint with chirality information",
-    "Morgan-Features": "Morgan fingerprint using feature definitions"
-}
-
-if mol_rep in fp_descriptions:
-    st.sidebar.info(f"**{mol_rep}**: {fp_descriptions[mol_rep]}")
-
-# Visualization Settings
-st.sidebar.markdown("### Visualization Settings")
-
-# Color Mapping options
-viz_color_col = st.sidebar.selectbox(
-    "Color Mapping", 
-    ["Zone", "SALI", "Max_Activity", "Density"]  # Fixed column names
-)
-
-cmap_name = st.sidebar.selectbox(
-    "Colormap", 
-    ["viridis", "plasma", "inferno", "turbo", "RdYlBu", "jet"],
-    index=0
-)
-
-max_viz_pairs = st.sidebar.number_input("Max pairs to plot", 2000, 100000, 10000, 1000)
-
-# Landscape Thresholds
-st.sidebar.markdown("### Landscape Thresholds")
-sim_cutoff = st.sidebar.slider("Similarity Cutoff", 0.1, 0.9, 0.7, 0.05)
-act_cutoff = st.sidebar.slider("Activity Cutoff", 0.5, 4.0, 1.0, 0.1)
-
-# Clear cache button to force recalculation when fingerprints change
-if st.sidebar.button("Clear Cache & Refresh"):
-    st.cache_data.clear()
-    st.session_state['analysis_results'] = None
-    st.rerun()
-
-# --- DATA INPUT ---
 st.subheader("Dataset Input")
 uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
 
@@ -372,15 +279,28 @@ if uploaded_file is not None:
     if df_input.empty:
         st.warning("Uploaded file is empty")
         st.stop()
-        
+    
+    # Column mapping interface
+    st.subheader("Column Mapping")
+    st.info("Please map your CSV columns to the required fields:")
+    
     col1, col2, col3 = st.columns(3)
+    
     with col1:
-        id_col = st.selectbox("ID Column", ["None"] + list(df_input.columns))
+        available_columns = list(df_input.columns)
+        id_col = st.selectbox("ID Column (Optional)", ["None"] + available_columns)
+    
     with col2:
-        smiles_col = st.selectbox("SMILES Column", df_input.columns)
+        smiles_col = st.selectbox("SMILES Column *", available_columns)
+    
     with col3:
-        act_col = st.selectbox("Activity Column", df_input.columns)
-
+        act_col = st.selectbox("Activity Column *", available_columns)
+    
+    # Show column preview
+    st.write("**Column Preview:**")
+    preview_df = df_input[[smiles_col, act_col] + ([id_col] if id_col != "None" else [])].head()
+    st.dataframe(preview_df)
+    
     # Validation checks
     validation_passed = True
     validation_errors = []
@@ -399,6 +319,12 @@ if uploaded_file is not None:
         if df_input[smiles_col].isna().all():
             validation_errors.append(f"SMILES Column '{smiles_col}' contains only empty values")
             validation_passed = False
+        else:
+            # Quick check for valid SMILES
+            sample_smiles = df_input[smiles_col].dropna().iloc[0]
+            if Chem.MolFromSmiles(str(sample_smiles)) is None:
+                validation_errors.append(f"Sample SMILES '{sample_smiles}' appears to be invalid")
+                validation_passed = False
     
     if act_col in df_input.columns:
         if df_input[act_col].isna().all():
@@ -417,13 +343,151 @@ if uploaded_file is not None:
         st.error("**Validation Errors:**")
         for error in validation_errors:
             st.error(f"• {error}")
+        st.info("Please correct the column mapping above and try again.")
         st.stop()
-
-    # Display current fingerprint settings
-    st.info(f"**Current Settings:** {mol_rep} | Radius: {radius_param} | Bits: {bit_size} | Similarity Cutoff: {sim_cutoff} | Activity Cutoff: {act_cutoff}")
-
+    
+    # Store column mapping in session state
+    st.session_state['column_mapping'] = {
+        'id_col': id_col,
+        'smiles_col': smiles_col,
+        'act_col': act_col
+    }
+    
+    # ==============================================================================
+    # 5. FINGERPRINT SELECTION & ANALYSIS SETTINGS
+    # ==============================================================================
+    
+    st.markdown("---")
+    st.subheader("Fingerprint Selection & Analysis Settings")
+    
+    # Fingerprint categories
+    fp_categories = {
+        "Extended Connectivity Fingerprints (ECFP)": ["ECFP4", "ECFP6", "ECFP8", "ECFP10"],
+        "Functional Connectivity Fingerprints (FCFP)": ["FCFP4", "FCFP6"],
+        "Morgan Fingerprints (Advanced)": ["Morgan-Count", "Morgan-Chirality", "Morgan-Features"],
+        "Other Fingerprints": ["MACCS", "RDKit", "Avalon", "AtomPairs", "TopologicalTorsions", "Pattern"]
+    }
+    
+    # Create tabs for different fingerprint categories
+    fp_tabs = st.tabs(list(fp_categories.keys()))
+    
+    selected_fingerprint = None
+    fingerprint_params = {}
+    
+    for i, (category, fingerprints) in enumerate(fp_categories.items()):
+        with fp_tabs[i]:
+            st.write(f"**{category}**")
+            
+            for fp in fingerprints:
+                if st.button(f"Select {fp}", key=f"btn_{fp}"):
+                    selected_fingerprint = fp
+                    st.session_state['selected_fp'] = fp
+            
+            # Show which fingerprint is currently selected
+            if 'selected_fp' in st.session_state and st.session_state['selected_fp'] in fingerprints:
+                st.success(f"✅ Currently selected: **{st.session_state['selected_fp']}**")
+    
+    # If no fingerprint selected yet, show message
+    if 'selected_fp' not in st.session_state:
+        st.info("👆 Please select a fingerprint type from the tabs above")
+        st.stop()
+    
+    mol_rep = st.session_state['selected_fp']
+    
+    # Fingerprint-specific parameters
+    st.write("**Fingerprint Parameters:**")
+    
+    # Set default parameters based on fingerprint type
+    default_bits = 2048
+    default_radius = 2
+    
+    if mol_rep in ["ECFP4", "FCFP4"]:
+        default_radius = 2
+    elif mol_rep in ["ECFP6", "FCFP6"]:
+        default_radius = 3
+    elif mol_rep == "ECFP8":
+        default_radius = 4
+    elif mol_rep == "ECFP10":
+        default_radius = 5
+    
+    # Show radius parameter for fingerprints that use it
+    if mol_rep in ["ECFP4", "ECFP6", "ECFP8", "ECFP10", "FCFP4", "FCFP6", 
+                   "Morgan-Count", "Morgan-Chirality", "Morgan-Features"]:
+        radius_param = st.slider("Radius Parameter", 1, 6, default_radius, 1,
+                               help="Radius for Morgan fingerprint generation. Larger values capture larger molecular environments.")
+    else:
+        radius_param = default_radius
+        st.info(f"Radius parameter not applicable for {mol_rep}")
+    
+    # Bit size selection
+    if mol_rep in ["ECFP4", "ECFP6", "ECFP8", "ECFP10", "FCFP4", "FCFP6", 
+                   "RDKit", "Avalon", "AtomPairs", "TopologicalTorsions", "Pattern",
+                   "Morgan-Count", "Morgan-Chirality", "Morgan-Features"]:
+        bit_size = st.selectbox("Bit Dimension", [512, 1024, 2048, 4096], index=2)
+    else:
+        # MACCS has fixed size
+        bit_size = 167
+        st.info(f"MACCS uses fixed 167-bit fingerprint")
+    
+    # Display fingerprint description
+    fp_descriptions = {
+        "ECFP4": "Extended Connectivity Fingerprint (radius 2) - captures atom environments up to 2 bonds away",
+        "ECFP6": "Extended Connectivity Fingerprint (radius 3) - captures larger atom environments",
+        "ECFP8": "Extended Connectivity Fingerprint (radius 4) - very large atom environments",
+        "ECFP10": "Extended Connectivity Fingerprint (radius 5) - extensive atom environments",
+        "FCFP4": "Functional Class Fingerprint (radius 2) - based on pharmacophoric features",
+        "FCFP6": "Functional Class Fingerprint (radius 3) - larger pharmacophoric features",
+        "MACCS": "MACCS Keys - 166 predefined structural fragments",
+        "RDKit": "RDKit topological fingerprint - based on hashed atom paths",
+        "Avalon": "Avalon fingerprint - linear fingerprints for chemical structures",
+        "AtomPairs": "Atom Pair fingerprint - captures pairs of atoms and their distances",
+        "TopologicalTorsions": "Topological Torsion fingerprint - captures linear sequences of 4 atoms",
+        "Pattern": "Pattern fingerprint - based on SMARTS patterns",
+        "Morgan-Count": "Morgan count-based fingerprint - uses counts instead of bits",
+        "Morgan-Chirality": "Morgan fingerprint with chirality information",
+        "Morgan-Features": "Morgan fingerprint using feature definitions"
+    }
+    
+    if mol_rep in fp_descriptions:
+        st.info(f"**{mol_rep}**: {fp_descriptions[mol_rep]}")
+    
+    # Visualization Settings
+    st.markdown("---")
+    st.subheader("Visualization Settings")
+    
+    col_viz1, col_viz2 = st.columns(2)
+    
+    with col_viz1:
+        # Color Mapping options
+        viz_color_col = st.selectbox(
+            "Color Mapping", 
+            ["Zone", "SALI", "Max_Activity", "Density"]
+        )
+        
+        cmap_name = st.selectbox(
+            "Colormap", 
+            ["viridis", "plasma", "inferno", "turbo", "RdYlBu", "jet"],
+            index=0
+        )
+    
+    with col_viz2:
+        max_viz_pairs = st.number_input("Max pairs to plot", 2000, 100000, 10000, 1000)
+        
+        # Landscape Thresholds
+        sim_cutoff = st.slider("Similarity Cutoff", 0.1, 0.9, 0.7, 0.05)
+        act_cutoff = st.slider("Activity Cutoff", 0.5, 4.0, 1.0, 0.1)
+    
+    # Clear cache button to force recalculation when fingerprints change
+    if st.button("Clear Cache & Refresh Analysis"):
+        st.cache_data.clear()
+        st.session_state['analysis_results'] = None
+        st.rerun()
+    
+    # Display current settings
+    st.info(f"**Current Analysis Settings:** {mol_rep} | Radius: {radius_param} | Bits: {bit_size} | Similarity Cutoff: {sim_cutoff} | Activity Cutoff: {act_cutoff}")
+    
     # RUN ANALYSIS
-    if st.button("🚀 Generate SAS Map Plot"):
+    if st.button("🚀 Generate SAS Map Plot", type="primary"):
         st.session_state['analysis_results'] = None  # Clear old results
         
         with st.spinner("Calculating molecular descriptors and similarities..."):
@@ -438,16 +502,19 @@ if uploaded_file is not None:
                 st.error("No results generated from analysis")
             else:
                 st.session_state['analysis_results'] = results
-                st.success(f"Analysis complete! Generated {len(results)} molecular pairs.")
+                st.success(f"Analysis complete! Generated {len(results)} molecular pairs using {mol_rep}.")
 
-    # DISPLAY RESULTS
+    # ==============================================================================
+    # 6. RESULTS DISPLAY
+    # ==============================================================================
+    
     if st.session_state['analysis_results'] is not None:
         results_df = st.session_state['analysis_results']
         
         st.markdown("---")
-        st.header("📊 SAS Map Plot Results")
+        st.header(f"📊 SAS Map Plot Results - {mol_rep}")
         
-        # Stats with Zone Names - FIXED
+        # Stats with Zone Names
         rc = results_df['Zone'].value_counts()
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Activity Cliffs", int(rc.get("Activity Cliffs", 0)))
@@ -462,7 +529,7 @@ if uploaded_file is not None:
         else:
             plot_df = results_df
 
-        # FIXED: Custom color mapping for zones with correct spelling
+        # Custom color mapping for zones with correct spelling
         zone_colors = {
             'Activity Cliffs': 'red',
             'Smooth SAR': 'green', 
@@ -470,7 +537,7 @@ if uploaded_file is not None:
             'Nondescriptive Zone': 'orange'
         }
 
-        # Handle categorical vs continuous color mapping - FIXED
+        # Handle categorical vs continuous color mapping
         if viz_color_col == "Zone":
             fig = px.scatter(
                 plot_df,
@@ -478,7 +545,7 @@ if uploaded_file is not None:
                 y="Activity_Diff",
                 color="Zone",
                 color_discrete_map=zone_colors,
-                title=f"SAS Map: Colored by Zone ({mol_rep})",
+                title=f"SAS Map ({mol_rep}): Colored by Zone",
                 hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
                 opacity=0.7,
                 render_mode='webgl',
@@ -496,7 +563,7 @@ if uploaded_file is not None:
                     y="Activity_Diff",
                     color=viz_color_col, 
                     color_continuous_scale=cmap_name,
-                    title=f"SAS Map: Colored by {viz_color_col} ({mol_rep})",
+                    title=f"SAS Map ({mol_rep}): Colored by {viz_color_col}",
                     hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
                     opacity=0.7,
                     render_mode='webgl'
@@ -509,7 +576,7 @@ if uploaded_file is not None:
                     y="Activity_Diff",
                     color="Zone",
                     color_discrete_map=zone_colors,
-                    title=f"SAS Map: Colored by Zone ({mol_rep})",
+                    title=f"SAS Map ({mol_rep}): Colored by Zone",
                     hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
                     opacity=0.7,
                     render_mode='webgl'
@@ -542,17 +609,12 @@ if uploaded_file is not None:
         
         st.plotly_chart(fig, use_container_width=True)
         
-        # Show data summary
-        st.subheader("Data Summary")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**Zone Distribution:**")
-            st.dataframe(results_df['Zone'].value_counts().reset_index().rename(columns={'index': 'Zone', 'Zone': 'Count'}))
-        
-        with col2:
-            st.write("**Statistical Summary:**")
-            st.dataframe(results_df[['Similarity', 'Activity_Diff', 'SALI', 'Max_Activity']].describe())
+        # Show zone distribution only (removed statistical summary)
+        st.subheader("Zone Distribution")
+        zone_dist = results_df['Zone'].value_counts().reset_index()
+        zone_dist.columns = ['Zone', 'Count']
+        zone_dist['Percentage'] = (zone_dist['Count'] / len(results_df) * 100).round(2)
+        st.dataframe(zone_dist)
         
         # Downloads
         csv_data = results_df.to_csv(index=False).encode('utf-8')
@@ -563,9 +625,9 @@ if uploaded_file is not None:
         
         d1, d2 = st.columns(2)
         with d1:
-            st.download_button("Download Data (CSV)", csv_data, "sas_map_results.csv", "text/csv")
+            st.download_button("Download Data (CSV)", csv_data, f"sas_map_results_{mol_rep}.csv", "text/csv")
         with d2:
-            st.download_button("Download Plot (HTML)", html_bytes, "sas_map_plot.html", "text/html")
+            st.download_button("Download Plot (HTML)", html_bytes, f"sas_map_plot_{mol_rep}.html", "text/html")
 
 else:
     st.info("👆 Please upload a CSV file to begin analysis")
