@@ -307,8 +307,8 @@ if st.session_state['show_help']:
 
 st.sidebar.subheader("About")
 st.sidebar.info(
-    "This tool analyzes Structure-Activity Relationships (SAR) using Activity Landscape Modeling. "
-    "It identifies Activity Cliffs, Scaffold Hops, and Smooth SAR regions."
+    "This tool analyzes Structure-Activity Relationships (SAR) using Activity Landscape Modelling. "
+    "It identifies Activity Cliffs, Scaffold Hops, Non-descript and Smooth SAR regions."
 )
 
 st.sidebar.subheader("Zone Definitions")
@@ -638,5 +638,6 @@ with footer_col3:
         "</div>",
         unsafe_allow_html=True
     )
+
 
 
