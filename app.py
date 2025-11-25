@@ -14,7 +14,7 @@ import seaborn as sns
 # ==============================================================================
 
 st.set_page_config(
-    page_title="Molecular Landscape Explorer",
+    page_title="Activity Landscape Explorer",
     layout="wide",
     page_icon="🧪"
 )
@@ -400,4 +400,5 @@ if uploaded_file is not None:
 
 else:
     st.info("👆 Please upload a CSV file to begin analysis")
+
 
