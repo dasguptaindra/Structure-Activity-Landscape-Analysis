@@ -1,6 +1,6 @@
 # Activity Landscape Explorer
 
-A comprehensive Streamlit web application for Structure-Activity Relationship (SAR) analysis using Activity Landscape Modelling. This tool enables chemists and researchers to visualize and analyze molecular similarity-activity relationships, identify activity cliffs, scaffold hops, and other key SAR patterns.
+**A comprehensive Streamlit web application for Structure-Activity Relationship (SAR) analysis using Activity Landscape Modelling. This tool enables chemists and researchers to visualize and analyze molecular similarity-activity relationships, identify activity cliffs, scaffold hops, and other key SAR patterns.**
 
 ![Activity Landscape Explorer](https://img.shields.io/badge/Streamlit-FF4B4B?style=for-the-badge&logo=Streamlit&logoColor=white) https://structure-activity-landscape-analysis-wf4uvhus5cv48lcz6esahe.streamlit.app/  
 
