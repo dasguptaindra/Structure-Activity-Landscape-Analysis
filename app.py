@@ -87,29 +87,12 @@ def generate_molecular_descriptors(smiles_list, desc_type, n_bits):
                 desc = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=n_bits, useFeatures=True)
             elif desc_type == "FCFP6":
                 desc = AllChem.GetMorganFingerprintAsBitVect(mol, radius=3, nBits=n_bits, useFeatures=True)
+            elif desc_type == "FCFP8":
+                desc = AllChem.GetMorganFingerprintAsBitVect(mol, radius=4, nBits=n_bits, useFeatures=True)
+            elif desc_type == "FCFP10":
+                desc = AllChem.GetMorganFingerprintAsBitVect(mol, radius=5, nBits=n_bits, useFeatures=True)
             elif desc_type == "MACCS":
                 desc = MACCSkeys.GenMACCSKeys(mol)
-            elif desc_type == "RDKit":
-                desc = Chem.RDKFingerprint(mol, fpSize=n_bits)
-            elif desc_type == "Avalon":
-                from rdkit.Avalon import pyAvalonTools
-                desc = pyAvalonTools.GetAvalonFP(mol, nBits=n_bits)
-            elif desc_type == "AtomPairs":
-                desc = Chem.rdMolDescriptors.GetHashedAtomPairFingerprintAsBitVect(mol, nBits=n_bits)
-            elif desc_type == "TopologicalTorsions":
-                desc = Chem.rdMolDescriptors.GetHashedTopologicalTorsionFingerprintAsBitVect(mol, nBits=n_bits)
-            elif desc_type == "Pattern":
-                desc = Chem.rdmolops.PatternFingerprint(mol, fpSize=n_bits)
-            elif desc_type == "Morgan-Count":
-                # Count-based Morgan fingerprint
-                fp_gen = rdFingerprintGenerator.GetCountFPGenerator(fpSize=n_bits, radius=2)
-                desc = fp_gen.GetCountFingerprint(mol)
-            elif desc_type == "Morgan-Chirality":
-                # Morgan fingerprint with chirality
-                desc = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=n_bits, useChirality=True)
-            elif desc_type == "Morgan-Features":
-                # Morgan fingerprint with feature flags
-                desc = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=n_bits, useFeatures=True)
             else:
                 # Default to ECFP4
                 desc = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=n_bits)
@@ -425,12 +408,11 @@ if uploaded_file is not None:
         st.markdown("---")
         st.subheader("Fingerprint Selection & Analysis Settings")
         
-        # Fingerprint categories
+        # Only show the requested fingerprints
         fp_categories = {
             "Extended Connectivity Fingerprints (ECFP)": ["ECFP4", "ECFP6", "ECFP8", "ECFP10"],
-            "Functional Connectivity Fingerprints (FCFP)": ["FCFP4", "FCFP6"],
-            "Morgan Fingerprints (Advanced)": ["Morgan-Count", "Morgan-Chirality", "Morgan-Features"],
-            "Other Fingerprints": ["MACCS", "RDKit", "Avalon", "AtomPairs", "TopologicalTorsions", "Pattern"]
+            "Functional Connectivity Fingerprints (FCFP)": ["FCFP4", "FCFP6", "FCFP8", "FCFP10"],
+            "MACCS Keys": ["MACCS"]
         }
         
         # Create tabs for different fingerprint categories
@@ -462,9 +444,7 @@ if uploaded_file is not None:
         st.write("**Fingerprint Parameters:**")
         
         # Bit size selection
-        if mol_rep in ["ECFP4", "ECFP6", "ECFP8", "ECFP10", "FCFP4", "FCFP6", 
-                       "RDKit", "Avalon", "AtomPairs", "TopologicalTorsions", "Pattern",
-                       "Morgan-Count", "Morgan-Chirality", "Morgan-Features"]:
+        if mol_rep in ["ECFP4", "ECFP6", "ECFP8", "ECFP10", "FCFP4", "FCFP6", "FCFP8", "FCFP10"]:
             bit_size = st.selectbox("Bit Dimension", [512, 1024, 2048, 4096], index=2)
         else:
             # MACCS has fixed size
@@ -479,15 +459,9 @@ if uploaded_file is not None:
             "ECFP10": "Extended Connectivity Fingerprint (radius 5) - extensive atom environments",
             "FCFP4": "Functional Class Fingerprint (radius 2) - based on pharmacophoric features",
             "FCFP6": "Functional Class Fingerprint (radius 3) - larger pharmacophoric features",
-            "MACCS": "MACCS Keys - 166 predefined structural fragments",
-            "RDKit": "RDKit topological fingerprint - based on hashed atom paths",
-            "Avalon": "Avalon fingerprint - linear fingerprints for chemical structures",
-            "AtomPairs": "Atom Pair fingerprint - captures pairs of atoms and their distances",
-            "TopologicalTorsions": "Topological Torsion fingerprint - captures linear sequences of 4 atoms",
-            "Pattern": "Pattern fingerprint - based on SMARTS patterns",
-            "Morgan-Count": "Morgan count-based fingerprint - uses counts instead of bits",
-            "Morgan-Chirality": "Morgan fingerprint with chirality information",
-            "Morgan-Features": "Morgan fingerprint using feature definitions"
+            "FCFP8": "Functional Class Fingerprint (radius 4) - extensive pharmacophoric features",
+            "FCFP10": "Functional Class Fingerprint (radius 5) - very extensive pharmacophoric features",
+            "MACCS": "MACCS Keys - 166 predefined structural fragments"
         }
         
         if mol_rep in fp_descriptions:
@@ -570,7 +544,7 @@ if uploaded_file is not None:
             c4.metric("Nondescriptive Zone", int(rc.get("Nondescriptive Zone", 0)))
             
             # Plotting - ALWAYS PLOT ALL PAIRS (removed sampling)
-            plot_df = results_df
+            plot_df = results_df.copy()  # Create a copy to avoid modifying original
 
             # Custom color mapping for zones with correct spelling
             zone_colors = {
@@ -597,20 +571,54 @@ if uploaded_file is not None:
             else:
                 # For continuous color scales, ensure data is valid
                 if viz_color_col in plot_df.columns:
-                    # Remove infinite values for continuous color scales
-                    plot_df_clean = plot_df.replace([np.inf, -np.inf], np.nan)
+                    # Remove infinite values and handle NaN for continuous color scales
+                    plot_df_clean = plot_df.copy()
                     
-                    fig = px.scatter(
-                        plot_df_clean,
-                        x="Similarity",
-                        y="Activity_Diff",
-                        color=viz_color_col, 
-                        color_continuous_scale=cmap_name,
-                        title=f"SAS Map ({mol_rep}): Colored by {viz_color_col}",
-                        hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
-                        opacity=0.7,
-                        render_mode='webgl'
-                    )
+                    if viz_color_col == "SALI":
+                        # Handle SALI specifically - replace inf with large finite values
+                        plot_df_clean[viz_color_col] = plot_df_clean[viz_color_col].replace([np.inf, -np.inf], np.nan)
+                        # Fill NaN with median or drop
+                        if plot_df_clean[viz_color_col].isna().any():
+                            median_val = plot_df_clean[viz_color_col].median()
+                            plot_df_clean[viz_color_col] = plot_df_clean[viz_color_col].fillna(median_val)
+                    
+                    elif viz_color_col == "Density":
+                        # Handle Density - ensure it's properly scaled
+                        plot_df_clean[viz_color_col] = plot_df_clean[viz_color_col].replace([np.inf, -np.inf], np.nan)
+                        if plot_df_clean[viz_color_col].isna().any():
+                            plot_df_clean = plot_df_clean.dropna(subset=[viz_color_col])
+                    
+                    elif viz_color_col == "Max_Activity":
+                        # Handle Max_Activity - ensure numeric
+                        plot_df_clean[viz_color_col] = pd.to_numeric(plot_df_clean[viz_color_col], errors='coerce')
+                        plot_df_clean = plot_df_clean.dropna(subset=[viz_color_col])
+                    
+                    # Only create plot if we have valid data
+                    if not plot_df_clean.empty and len(plot_df_clean) > 1:
+                        fig = px.scatter(
+                            plot_df_clean,
+                            x="Similarity",
+                            y="Activity_Diff",
+                            color=viz_color_col, 
+                            color_continuous_scale=cmap_name,
+                            title=f"SAS Map ({mol_rep}): Colored by {viz_color_col}",
+                            hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
+                            opacity=0.7,
+                            render_mode='webgl'
+                        )
+                    else:
+                        st.warning(f"Not enough valid data for {viz_color_col} coloring. Falling back to Zone coloring.")
+                        fig = px.scatter(
+                            plot_df,
+                            x="Similarity",
+                            y="Activity_Diff",
+                            color="Zone",
+                            color_discrete_map=zone_colors,
+                            title=f"SAS Map ({mol_rep}): Colored by Zone",
+                            hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
+                            opacity=0.7,
+                            render_mode='webgl'
+                        )
                 else:
                     st.error(f"Column '{viz_color_col}' not found in results")
                     fig = px.scatter(
