@@ -55,7 +55,7 @@ def compute_density(x, y):
         return np.zeros_like(x)
 
 @st.cache_data
-def generate_molecular_descriptors(smiles_list, desc_type, radius_param, n_bits):
+def generate_molecular_descriptors(smiles_list, desc_type, n_bits):
     """Generate molecular descriptors (Cached for speed)."""
     descriptors = []
     valid_indices = []
@@ -98,14 +98,14 @@ def generate_molecular_descriptors(smiles_list, desc_type, radius_param, n_bits)
                 desc = Chem.rdmolops.PatternFingerprint(mol, fpSize=n_bits)
             elif desc_type == "Morgan-Count":
                 # Count-based Morgan fingerprint
-                fp_gen = rdFingerprintGenerator.GetCountFPGenerator(fpSize=n_bits, radius=radius_param)
+                fp_gen = rdFingerprintGenerator.GetCountFPGenerator(fpSize=n_bits, radius=2)
                 desc = fp_gen.GetCountFingerprint(mol)
             elif desc_type == "Morgan-Chirality":
                 # Morgan fingerprint with chirality
-                desc = AllChem.GetMorganFingerprintAsBitVect(mol, radius=radius_param, nBits=n_bits, useChirality=True)
+                desc = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=n_bits, useChirality=True)
             elif desc_type == "Morgan-Features":
                 # Morgan fingerprint with feature flags
-                desc = AllChem.GetMorganFingerprintAsBitVect(mol, radius=radius_param, nBits=n_bits, useFeatures=True)
+                desc = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=n_bits, useFeatures=True)
             else:
                 # Default to ECFP4
                 desc = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=n_bits)
@@ -143,7 +143,7 @@ def compute_similarity_matrix(descriptors):
 @st.cache_data
 def process_landscape_data(
     df, smiles_col, act_col, id_col, 
-    desc_type, radius, bits, sim_thresh, act_thresh
+    desc_type, bits, sim_thresh, act_thresh
 ):
     """Main processing pipeline with updated Zone Names."""
     # Input validation
@@ -168,7 +168,7 @@ def process_landscape_data(
 
     # 1. Descriptors
     descriptors, valid_idx = generate_molecular_descriptors(
-        smiles_arr, desc_type, radius, bits
+        smiles_arr, desc_type, bits
     )
     
     if len(descriptors) < 2:
@@ -334,53 +334,54 @@ if uploaded_file is not None:
         st.error(f"Could not display preview: {str(e)}")
         st.write("Please ensure the selected columns exist in your data.")
     
-    # Validation checks
-    validation_passed = True
-    validation_errors = []
-    
-    # Check if required columns are selected
-    if smiles_col == act_col:
-        validation_errors.append("SMILES Column and Activity Column cannot be the same")
-        validation_passed = False
-    
-    if id_col != "None" and (id_col == smiles_col or id_col == act_col):
-        validation_errors.append("ID Column cannot be the same as SMILES or Activity Column")
-        validation_passed = False
-    
-    # Check for valid data in selected columns
-    if smiles_col in df_input.columns:
-        smiles_data = df_input[smiles_col].dropna()
-        if smiles_data.empty:
-            validation_errors.append(f"SMILES Column '{smiles_col}' contains only empty values")
+    # Validation checks - only show errors after user has made selections
+    if smiles_col and act_col:
+        validation_passed = True
+        validation_errors = []
+        
+        # Check if required columns are selected
+        if smiles_col == act_col:
+            validation_errors.append("SMILES Column and Activity Column cannot be the same")
             validation_passed = False
-        else:
-            # Quick check for valid SMILES
-            sample_smiles = str(smiles_data.iloc[0]).strip()
-            if not sample_smiles or Chem.MolFromSmiles(sample_smiles) is None:
-                validation_errors.append(f"Sample SMILES '{sample_smiles}' appears to be invalid")
-                validation_passed = False
-    
-    if act_col in df_input.columns:
-        act_data = df_input[act_col].dropna()
-        if act_data.empty:
-            validation_errors.append(f"Activity Column '{act_col}' contains only empty values")
+        
+        if id_col != "None" and (id_col == smiles_col or id_col == act_col):
+            validation_errors.append("ID Column cannot be the same as SMILES or Activity Column")
             validation_passed = False
-        else:
-            # Try to convert to numeric to check if it's actually numeric data
-            try:
-                # Convert back to numeric for validation
-                pd.to_numeric(act_data)
-            except (ValueError, TypeError):
-                validation_errors.append(f"Activity Column '{act_col}' contains non-numeric values")
+        
+        # Check for valid data in selected columns
+        if smiles_col in df_input.columns:
+            smiles_data = df_input[smiles_col].dropna()
+            if smiles_data.empty:
+                validation_errors.append(f"SMILES Column '{smiles_col}' contains only empty values")
                 validation_passed = False
+            else:
+                # Quick check for valid SMILES
+                sample_smiles = str(smiles_data.iloc[0]).strip()
+                if not sample_smiles or Chem.MolFromSmiles(sample_smiles) is None:
+                    validation_errors.append(f"Sample SMILES '{sample_smiles}' appears to be invalid")
+                    validation_passed = False
+        
+        if act_col in df_input.columns:
+            act_data = df_input[act_col].dropna()
+            if act_data.empty:
+                validation_errors.append(f"Activity Column '{act_col}' contains only empty values")
+                validation_passed = False
+            else:
+                # Try to convert to numeric to check if it's actually numeric data
+                try:
+                    # Convert back to numeric for validation
+                    pd.to_numeric(act_data)
+                except (ValueError, TypeError):
+                    validation_errors.append(f"Activity Column '{act_col}' contains non-numeric values")
+                    validation_passed = False
 
-    # Display validation errors
-    if not validation_passed:
-        st.error("**Validation Errors:**")
-        for error in validation_errors:
-            st.error(f"• {error}")
-        st.info("Please correct the column mapping above and try again.")
-        st.stop()
+        # Display validation errors
+        if not validation_passed:
+            st.error("**Validation Errors:**")
+            for error in validation_errors:
+                st.error(f"• {error}")
+            st.info("Please correct the column mapping above and try again.")
+            st.stop()
     
     # Store column mapping in session state
     st.session_state['column_mapping'] = {
@@ -431,28 +432,6 @@ if uploaded_file is not None:
     
     # Fingerprint-specific parameters
     st.write("**Fingerprint Parameters:**")
-    
-    # Set default parameters based on fingerprint type
-    default_bits = 2048
-    default_radius = 2
-    
-    if mol_rep in ["ECFP4", "FCFP4"]:
-        default_radius = 2
-    elif mol_rep in ["ECFP6", "FCFP6"]:
-        default_radius = 3
-    elif mol_rep == "ECFP8":
-        default_radius = 4
-    elif mol_rep == "ECFP10":
-        default_radius = 5
-    
-    # Show radius parameter for fingerprints that use it
-    if mol_rep in ["ECFP4", "ECFP6", "ECFP8", "ECFP10", "FCFP4", "FCFP6", 
-                   "Morgan-Count", "Morgan-Chirality", "Morgan-Features"]:
-        radius_param = st.slider("Radius Parameter", 1, 6, default_radius, 1,
-                               help="Radius for Morgan fingerprint generation. Larger values capture larger molecular environments.")
-    else:
-        radius_param = default_radius
-        st.info(f"Radius parameter not applicable for {mol_rep}")
     
     # Bit size selection
     if mol_rep in ["ECFP4", "ECFP6", "ECFP8", "ECFP10", "FCFP4", "FCFP6", 
@@ -506,8 +485,6 @@ if uploaded_file is not None:
         )
     
     with col_viz2:
-        max_viz_pairs = st.number_input("Max pairs to plot", 2000, 100000, 10000, 1000)
-        
         # Landscape Thresholds
         sim_cutoff = st.slider("Similarity Cutoff", 0.1, 0.9, 0.7, 0.05)
         act_cutoff = st.slider("Activity Cutoff", 0.5, 4.0, 1.0, 0.1)
@@ -519,7 +496,7 @@ if uploaded_file is not None:
         st.rerun()
     
     # Display current settings
-    st.info(f"**Current Analysis Settings:** {mol_rep} | Radius: {radius_param} | Bits: {bit_size} | Similarity Cutoff: {sim_cutoff} | Activity Cutoff: {act_cutoff}")
+    st.info(f"**Current Analysis Settings:** {mol_rep} | Bits: {bit_size} | Similarity Cutoff: {sim_cutoff} | Activity Cutoff: {act_cutoff}")
     
     # RUN ANALYSIS
     if st.button("🚀 Generate SAS Map Plot", type="primary"):
@@ -535,7 +512,7 @@ if uploaded_file is not None:
                 
             results, error_msg = process_landscape_data(
                 df_input, smiles_col, act_col, id_col,
-                mol_rep, radius_param, bit_size, sim_cutoff, act_cutoff
+                mol_rep, bit_size, sim_cutoff, act_cutoff
             )
             
             if error_msg:
@@ -564,12 +541,8 @@ if uploaded_file is not None:
         c3.metric("Similarity Cliffs", int(rc.get("Similarity Cliffs", 0)))
         c4.metric("Nondescriptive Zone", int(rc.get("Nondescriptive Zone", 0)))
         
-        # Plotting
-        if len(results_df) > max_viz_pairs:
-            plot_df = results_df.sample(n=max_viz_pairs, random_state=42)
-            st.info(f"Displaying {max_viz_pairs} random pairs from {len(results_df)} total pairs")
-        else:
-            plot_df = results_df
+        # Plotting - ALWAYS PLOT ALL PAIRS (removed sampling)
+        plot_df = results_df
 
         # Custom color mapping for zones with correct spelling
         zone_colors = {
