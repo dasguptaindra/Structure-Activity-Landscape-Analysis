@@ -221,7 +221,7 @@ def process_landscape_data(
 # 3. UI LAYOUT
 # ==============================================================================
 
-st.title("Molecular Landscape Explorer")
+st.title("Activity Landscape Explorer")
 
 st.sidebar.subheader("Technical support")
 st.sidebar.markdown(
@@ -400,5 +400,6 @@ if uploaded_file is not None:
 
 else:
     st.info("👆 Please upload a CSV file to begin analysis")
+
 
 
