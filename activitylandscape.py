@@ -590,6 +590,7 @@ else:
     ## Welcome to the Activity Landscape Explorer!
     
     This application helps you analyze Structure-Activity Relationships (SAR) through Activity Landscape Modelling.
+
     
 # ==============================================================================
 # 8. FOOTER
@@ -625,6 +626,7 @@ with footer_col3:
         "</div>",
         unsafe_allow_html=True
     )
+
 
 
 
