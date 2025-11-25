@@ -229,8 +229,8 @@ st.sidebar.markdown(
     [project repository](https://github.com/dasguptaindra/Structure-Activity-Landscape-Analysis)."""
 )
 
-# Molecular Representation Settings
-st.sidebar.markdown("### Molecular Representation")
+# Parameters
+st.sidebar.markdown("### Fingerprint Name")
 mol_rep = st.sidebar.selectbox("Type", ["ECFP4", "ECFP6", "MACCS"], index=0)
 
 if mol_rep.startswith("ECFP"):
@@ -400,3 +400,4 @@ if uploaded_file is not None:
 
 else:
     st.info("👆 Please upload a CSV file to begin analysis")
+
