@@ -24,8 +24,6 @@ sns.set_style("whitegrid")
 # Initialize Session State
 if 'analysis_results' not in st.session_state:
     st.session_state['analysis_results'] = None
-if 'analysis_mode_state' not in st.session_state:
-    st.session_state['analysis_mode_state'] = None
 
 # ==============================================================================
 # 2. CORE COMPUTATIONAL FUNCTIONS (CACHED)
@@ -168,16 +166,16 @@ def process_landscape_data(
             act_diff = abs(act_arr[i] - act_arr[j])
             
             # -------------------------------------------------------
-            # ZONE CLASSIFICATION LOGIC (MODIFIED NAMES)
+            # ZONE CLASSIFICATION LOGIC
             # -------------------------------------------------------
             if sim >= sim_thresh and act_diff >= act_thresh:
                 zone = 'Activity Cliffs'
             elif sim < sim_thresh and act_diff < act_thresh:
-                zone = 'Similarity Cliffs'    # Previously 'Scaffold Transitions'
+                zone = 'Similarity Cliffs'
             elif sim >= sim_thresh and act_diff < act_thresh:
-                zone = 'Smooth SAR'           # Previously 'Consistent SAR Regions'
+                zone = 'Smooth SAR'
             else:
-                zone = 'Nondescriptive Zone'  # Previously 'Baseline Regions'
+                zone = 'Nondescriptive Zone'
 
             # Calculate SALI with safe division
             denominator = max(1.0 - sim, min_dist)
@@ -231,58 +229,38 @@ st.sidebar.markdown(
     [project repository](https://github.com/dasguptaindra/Structure-Activity-Landscape-Analysis)."""
 )
 
-# 1. Analysis Mode
-analysis_mode = st.sidebar.radio(
-    "Analysis Mode", 
-    ["Basic Landscape", "SAS Map Plot"] 
+# Molecular Representation Settings
+st.sidebar.markdown("### Molecular Representation")
+mol_rep = st.sidebar.selectbox("Type", ["ECFP4", "ECFP6", "MACCS"], index=0)
+
+if mol_rep.startswith("ECFP"):
+    radius_param = 2 if mol_rep == "ECFP4" else 3
+    bit_size = st.sidebar.selectbox("Bit Dimension", [1024, 2048], index=0)
+else:
+    radius_param = 0
+    bit_size = 167 
+
+# Visualization Settings
+st.sidebar.markdown("### Visualization Settings")
+
+# Color Mapping options
+viz_color_col = st.sidebar.selectbox(
+    "Color Mapping", 
+    ["Zone", "SALI", "Max. Activity", "Density"]
 )
 
-# Initialize defaults
-radius_param = 2
-bit_size = 1024
-mol_rep = "ECFP4"
-sim_cutoff = 0.7
-act_cutoff = 1.0
+cmap_name = st.sidebar.selectbox(
+    "Colormap", 
+    ["viridis", "plasma", "inferno", "turbo", "RdYlBu", "jet"],
+    index=0
+)
 
-if analysis_mode == "Basic Landscape":
-    st.sidebar.info("Basic visual check.")
-    selected_fp = st.sidebar.selectbox("Fingerprint", ['ECFP4', 'ECFP6'])
-    radius_param = 2 if selected_fp == 'ECFP4' else 3
-    sim_cutoff = st.sidebar.slider("Similarity Threshold", 0.5, 1.0, 0.7)
-    act_cutoff = st.sidebar.slider("Activity Diff Threshold", 0.5, 5.0, 1.0)
-    mol_rep = selected_fp
+max_viz_pairs = st.sidebar.number_input("Max pairs to plot", 2000, 100000, 10000, 1000)
 
-else:  # SAS Map Plot Mode
-    st.sidebar.markdown("### Molecular Representation")
-    mol_rep = st.sidebar.selectbox("Type", ["ECFP4", "ECFP6", "MACCS"], index=0)
-    
-    if mol_rep.startswith("ECFP"):
-        radius_param = 2 if mol_rep == "ECFP4" else 3
-        bit_size = st.sidebar.selectbox("Bit Dimension", [1024, 2048], index=0)
-    else:
-        radius_param = 0
-        bit_size = 167 
-
-    st.sidebar.markdown("### Visualization Settings")
-    
-    # Color Mapping options
-    viz_color_col = st.sidebar.selectbox(
-        "Color Mapping", 
-        ["SALI", "Max. Activity", "Density", "Zone"]
-    )
-    
-    cmap_name = st.sidebar.selectbox(
-        "Colormap", 
-        ["viridis", "plasma", "inferno", "turbo", "RdYlBu", "jet"],
-        index=0
-    )
-    
-    max_viz_pairs = st.sidebar.number_input("Max pairs to plot", 2000, 100000, 10000, 1000)
-    
-    st.sidebar.markdown("### Landscape Thresholds")
-    sim_cutoff = st.sidebar.slider("Similarity Cutoff", 0.1, 0.9, 0.7, 0.05)
-    act_cutoff = st.sidebar.slider("Activity Cutoff", 0.5, 4.0, 1.0, 0.1)
-
+# Landscape Thresholds
+st.sidebar.markdown("### Landscape Thresholds")
+sim_cutoff = st.sidebar.slider("Similarity Cutoff", 0.1, 0.9, 0.7, 0.05)
+act_cutoff = st.sidebar.slider("Activity Cutoff", 0.5, 4.0, 1.0, 0.1)
 
 # --- DATA INPUT ---
 st.subheader("Dataset Input")
@@ -311,7 +289,7 @@ if uploaded_file is not None:
         act_col = st.selectbox("Activity Column", df_input.columns)
 
     # RUN ANALYSIS
-    if st.button(f"🚀 Generate {analysis_mode}"):
+    if st.button("🚀 Generate SAS Map Plot"):
         st.session_state['analysis_results'] = None  # Clear old results
         
         with st.spinner("Calculating molecular descriptors and similarities..."):
@@ -326,135 +304,99 @@ if uploaded_file is not None:
                 st.error("No results generated from analysis")
             else:
                 st.session_state['analysis_results'] = results
-                st.session_state['analysis_mode_state'] = analysis_mode
                 st.success(f"Analysis complete! Generated {len(results)} molecular pairs.")
 
     # DISPLAY RESULTS
     if st.session_state['analysis_results'] is not None:
         results_df = st.session_state['analysis_results']
-        current_mode = st.session_state['analysis_mode_state']
         
         st.markdown("---")
+        st.header("📊 SAS Map Plot Results")
         
-        if current_mode == "SAS Map Plot":
-            st.header("📊 SAS Map Plot Results")
-            
-            # Stats with Updated Zone Names
-            rc = results_df['Zone'].value_counts()
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Activity Cliffs", int(rc.get("Activity Cliffs", 0)))
-            c2.metric("Smooth SAR", int(rc.get("Smooth SAR", 0)))
-            c3.metric("Similarity Cliffs", int(rc.get("Similarity Cliffs", 0)))
-            c4.metric("Nondescriptive", int(rc.get("Nondescriptive Zone", 0)))
-            
-            # Plotting
-            if len(results_df) > max_viz_pairs:
-                plot_df = results_df.sample(n=max_viz_pairs, random_state=42)
-                st.info(f"Displaying {max_viz_pairs} random pairs from {len(results_df)} total pairs")
-            else:
-                plot_df = results_df
+        # Stats with Zone Names
+        rc = results_df['Zone'].value_counts()
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Activity Cliffs", int(rc.get("Activity Cliffs", 0)))
+        c2.metric("Smooth SAR", int(rc.get("Smooth SAR", 0)))
+        c3.metric("Similarity Cliffs", int(rc.get("Similarity Cliffs", 0)))
+        c4.metric("Nondescriptive", int(rc.get("Nondescriptive Zone", 0)))
+        
+        # Plotting
+        if len(results_df) > max_viz_pairs:
+            plot_df = results_df.sample(n=max_viz_pairs, random_state=42)
+            st.info(f"Displaying {max_viz_pairs} random pairs from {len(results_df)} total pairs")
+        else:
+            plot_df = results_df
 
-            # Handle categorical vs continuous color mapping
-            if viz_color_col == "Zone":
-                fig = px.scatter(
-                    plot_df,
-                    x="Similarity",
-                    y="Activity_Diff",
-                    color="Zone",
-                    title="SAS Map: Colored by Zone",
-                    hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
-                    opacity=0.7,
-                    render_mode='webgl'
-                )
-            else:
-                fig = px.scatter(
-                    plot_df,
-                    x="Similarity",
-                    y="Activity_Diff",
-                    color=viz_color_col, 
-                    color_continuous_scale=cmap_name,
-                    title=f"SAS Map: Colored by {viz_color_col}",
-                    hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
-                    opacity=0.7,
-                    render_mode='webgl'
-                )
-            
-            fig.add_vline(x=sim_cutoff, line_dash="dash", line_color="gray")
-            fig.add_hline(y=act_cutoff, line_dash="dash", line_color="gray")
-            
-            # PLOTLY FONT STYLING (Times New Roman)
-            fig.update_layout(
-                height=700,
-                xaxis_title="Similarity",
-                yaxis_title="Activity Difference",
-                font=dict(family="Times New Roman", size=16),
-                title_font=dict(family="Times New Roman", size=24),
-                xaxis=dict(
-                    title_font=dict(family="Times New Roman", size=20),
-                    tickfont=dict(family="Times New Roman", size=16),
-                    range=[0, 1]  # Fixed range for similarity
-                ),
-                yaxis=dict(
-                    title_font=dict(family="Times New Roman", size=20),
-                    tickfont=dict(family="Times New Roman", size=16)
-                )
+        # Custom color mapping for zones
+        zone_colors = {
+            'Activity Cliffs': 'red',
+            'Smooth SAR': 'green', 
+            'Similarity Cliffs': 'blue',
+            'Nondescriptive Zone': 'orange'
+        }
+
+        # Handle categorical vs continuous color mapping
+        if viz_color_col == "Zone":
+            fig = px.scatter(
+                plot_df,
+                x="Similarity",
+                y="Activity_Diff",
+                color="Zone",
+                color_discrete_map=zone_colors,
+                title="SAS Map: Colored by Zone",
+                hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
+                opacity=0.7,
+                render_mode='webgl'
             )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Downloads
-            csv_data = results_df.to_csv(index=False).encode('utf-8')
-            
-            buffer = io.StringIO()
-            fig.write_html(buffer, include_plotlyjs='cdn')
-            html_bytes = buffer.getvalue().encode()
-            
-            d1, d2 = st.columns(2)
-            with d1:
-                st.download_button("Download Data (CSV)", csv_data, "sas_map_results.csv", "text/csv")
-            with d2:
-                st.download_button("Download Plot (HTML)", html_bytes, "sas_map_plot.html", "text/html")
-                
-        else:  # Basic Mode
-            st.subheader("Basic Landscape Plot")
-            
-            # MATPLOTLIB FONT CONFIGURATION
-            plt.rcParams["font.family"] = "Times New Roman"
-            plt.rcParams["axes.labelsize"] = 18
-            plt.rcParams["axes.titlesize"] = 20
-            plt.rcParams["xtick.labelsize"] = 14
-            plt.rcParams["ytick.labelsize"] = 14
-            
-            fig, ax = plt.subplots(figsize=(10, 6))
-            
-            # Updated Colors Dictionary with New Zone Names
-            colors = {
-                'Activity Cliffs': 'red', 
-                'Smooth SAR': 'green', 
-                'Similarity Cliffs': 'purple', 
-                'Nondescriptive Zone': 'blue'
-            }
-            
-            for zone, color in colors.items():
-                subset = results_df[results_df['Zone'] == zone]
-                if not subset.empty:
-                    ax.scatter(subset['Similarity'], subset['Activity_Diff'], 
-                              c=color, label=zone, alpha=0.6, s=30)
-            
-            ax.axvline(sim_cutoff, c='k', ls='--', alpha=0.7, label=f'Sim threshold ({sim_cutoff})')
-            ax.axhline(act_cutoff, c='k', ls='--', alpha=0.7, label=f'Act threshold ({act_cutoff})')
-            ax.set_xlabel("Similarity")
-            ax.set_ylabel("Activity Difference")
-            ax.set_xlim(0, 1)
-            
-            # Set legend font
-            ax.legend(prop={'family': 'Times New Roman', 'size': 12})
-            ax.grid(True, alpha=0.3)
-            
-            st.pyplot(fig)
-            
-            csv_data = results_df.to_csv(index=False).encode('utf-8')
-            st.download_button("Download CSV", csv_data, "basic_results.csv", "text/csv")
+        else:
+            fig = px.scatter(
+                plot_df,
+                x="Similarity",
+                y="Activity_Diff",
+                color=viz_color_col, 
+                color_continuous_scale=cmap_name,
+                title=f"SAS Map: Colored by {viz_color_col}",
+                hover_data=["Mol1_ID", "Mol2_ID", "SALI", "Zone"],
+                opacity=0.7,
+                render_mode='webgl'
+            )
+        
+        fig.add_vline(x=sim_cutoff, line_dash="dash", line_color="gray")
+        fig.add_hline(y=act_cutoff, line_dash="dash", line_color="gray")
+        
+        # PLOTLY FONT STYLING (Times New Roman)
+        fig.update_layout(
+            height=700,
+            xaxis_title="Similarity",
+            yaxis_title="Activity Difference",
+            font=dict(family="Times New Roman", size=16),
+            title_font=dict(family="Times New Roman", size=24),
+            xaxis=dict(
+                title_font=dict(family="Times New Roman", size=20),
+                tickfont=dict(family="Times New Roman", size=16),
+                range=[0, 1]  # Fixed range for similarity
+            ),
+            yaxis=dict(
+                title_font=dict(family="Times New Roman", size=20),
+                tickfont=dict(family="Times New Roman", size=16)
+            )
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Downloads
+        csv_data = results_df.to_csv(index=False).encode('utf-8')
+        
+        buffer = io.StringIO()
+        fig.write_html(buffer, include_plotlyjs='cdn')
+        html_bytes = buffer.getvalue().encode()
+        
+        d1, d2 = st.columns(2)
+        with d1:
+            st.download_button("Download Data (CSV)", csv_data, "sas_map_results.csv", "text/csv")
+        with d2:
+            st.download_button("Download Plot (HTML)", html_bytes, "sas_map_plot.html", "text/html")
 
 else:
     st.info("👆 Please upload a CSV file to begin analysis")
