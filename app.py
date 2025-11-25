@@ -195,7 +195,7 @@ def process_landscape_data(
     is_high_diff = act_diffs >= act_thresh
     
     # Initialize zones array
-    zones = np.full(len(sim_values), 'Nondescriptive Zone', dtype=object)
+    zones = np.full(len(sim_values), 'Non-descript Zone', dtype=object)
     
     # Apply logic
     # Activity Cliffs: High Sim, High Diff
@@ -207,7 +207,7 @@ def process_landscape_data(
     # Scaffold Hops (formerly Similarity Cliffs): Low Sim, Low Diff
     zones[~is_high_sim & ~is_high_diff] = 'Scaffold Hops'
     
-    # Nondescriptive (Low Sim, High Diff) - already default
+    # Non-descript (Low Sim, High Diff) - already default
     
     # 5. Calculate SALI
     # Avoid division by zero
@@ -266,7 +266,7 @@ st.sidebar.markdown("""
 - **Activity Cliffs**: High similarity, high activity difference
 - **Smooth SAR**: High similarity, low activity difference  
 - **Scaffold Hops**: Low similarity, low activity difference
-- **Nondescriptive**: Low similarity, high activity difference
+- **Non-descript**: Low similarity, high activity difference
 """)
 
 # ==============================================================================
@@ -377,7 +377,7 @@ if uploaded_file is not None:
         m1.metric("Activity Cliffs", counts.get("Activity Cliffs", 0), delta_color="inverse")
         m2.metric("Scaffold Hops", counts.get("Scaffold Hops", 0), help="Structurally diverse, Similar Activity")
         m3.metric("Smooth SAR", counts.get("Smooth SAR", 0))
-        m4.metric("Nondescriptive", counts.get("Nondescriptive Zone", 0))
+        m4.metric("Non-descript", counts.get("Non-descript Zone", 0))
 
         # Visualization Controls
         c_viz1, c_viz2 = st.columns(2)
@@ -392,7 +392,7 @@ if uploaded_file is not None:
             'Activity Cliffs': 'red',
             'Smooth SAR': 'green',
             'Scaffold Hops': 'blue',
-            'Nondescriptive Zone': 'gray'
+            'Non-descript Zone': 'gray'
         }
 
         if color_by == "Zone":
@@ -401,7 +401,7 @@ if uploaded_file is not None:
                 color="Zone", color_discrete_map=zone_map,
                 hover_data=["Mol1_ID", "Mol2_ID", "SALI"],
                 title=f"Structure-Activity Similarity Map ({fp_type})",
-                category_orders={"Zone": ["Activity Cliffs", "Smooth SAR", "Scaffold Hops", "Nondescriptive Zone"]},
+                category_orders={"Zone": ["Activity Cliffs", "Smooth SAR", "Scaffold Hops", "Non-descript Zone"]},
                 opacity=0.7, render_mode='webgl' # WebGL for performance
             )
         else:
@@ -564,3 +564,4 @@ st.markdown(
     "</div>",
     unsafe_allow_html=True
 )
+
